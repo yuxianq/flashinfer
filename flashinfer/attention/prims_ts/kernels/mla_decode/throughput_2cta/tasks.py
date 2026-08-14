@@ -761,13 +761,7 @@ def create_mma_pv_task(
         with domain_loop(loop_start, loop_end, loop_step):
             staged_pv_mma(smem_kv, smem_p, tmem_o, iterations_pv)
 
-        staged_pv_mma(
-            smem_kv,
-            smem_p,
-            tmem_o,
-            iterations_pv,
-            is_tail=True,
-        )
+        staged_pv_mma(smem_kv, smem_p, tmem_o, iterations_pv)
         work_queue_tail(work_queue, advance_label="advance_tile")
 
     schedule_result = (

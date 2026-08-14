@@ -358,6 +358,8 @@ def make_grouped_q_launch_candidate(
 
 def select_grouped_q_launch_candidate(
     candidates: Sequence[GroupedQLaunchCandidate],
+    *,
+    headdim: int,
 ) -> GroupedQLaunchCandidate:
     """Select the lowest-cost legal grouped-Q launch recipe.
 
@@ -382,12 +384,17 @@ def select_grouped_q_launch_candidate(
 
 def select_grouped_q_direct_wave_candidate(
     candidates: Sequence[GroupedQLaunchCandidate],
+    *,
+    headdim: int,
 ) -> GroupedQLaunchCandidate:
     """Select a direct recipe using the same mainloop-aware launch score."""
     direct = tuple(recipe for recipe in candidates if recipe.splits_kv == 1)
     if not direct:
         raise ValueError("at least one direct grouped-Q candidate is required")
-    return select_grouped_q_launch_candidate(direct)
+    return select_grouped_q_launch_candidate(
+        direct,
+        headdim=headdim,
+    )
 
 
 def make_q_tile_geometry(
@@ -534,7 +541,7 @@ class FmhaDecodeConfig:
     # SMEM pipeline depth for the prefetched page-offset table.
     page_offsets_stages: int = 6
     # PaddingTask (non-paged): warps 14–15 fill otherwise-idle WG3 task slots
-    # in the fixed 16-warp task-scheduling layout.
+    # so every warp is covered by the same TS register budget.
     padding_warp_idx: int = 14  # WG3: warps 14-15
     padding_num_warps: int = 2
     # SchedulerTask: under persistent scheduling, warp 13 runs the CLC tile
@@ -554,27 +561,15 @@ class FmhaDecodeConfig:
     clc_tail_padding_num_warps: int = 0
 
     # ------------------------------------------------------------------
-    # Task-local register allocation
+    # Per-task register budgets for setmaxnreg / warp-group reallocation
     # ------------------------------------------------------------------
-    # The full TileQ128 Keeps graph has the largest live softmax/correction
-    # fragments and needs registers moved from its descriptor-only task group.
-    # Other graph topologies fit the compiler's common task budget and avoid
-    # the extra warp-group register reallocation instructions.
-    @property
-    def uses_task_register_reallocation(self) -> bool:
-        return self.use_keeps_mma_ab and self.tile_size_q == 128
-
-    @property
-    def softmax_task_num_registers(self) -> int | None:
-        return 184 if self.uses_task_register_reallocation else None
-
-    @property
-    def correction_task_num_registers(self) -> int | None:
-        return 88 if self.uses_task_register_reallocation else None
-
-    @property
-    def mma_load_task_num_registers(self) -> int | None:
-        return 56 if self.uses_task_register_reallocation else None
+    # Softmax warp groups: largest budget — they hold S/P/stats live in regs.
+    softmax_regs: int = 184
+    # CorrectionTask: moderate budget for the O rescale + epilogue.
+    correction_regs: int = 88
+    # Shared per-task budget for MMA, Load, and Padding tasks in WG3; these
+    # tasks hold mostly descriptors and pointers.
+    mma_load_regs: int = 56
 
     # ------------------------------------------------------------------
     # SMEM allocation alignment
@@ -760,7 +755,6 @@ class FmhaDecodeConfig:
             warp_ranges.extend(
                 (
                     self.scheduler_warp_idx + self.scheduler_num_warps,
-                    # ClcLoadTask reuses LoadTask's loader-warp contract.
                     self.clc_load_warp_idx + self.load_num_warps,
                     self.clc_padding_warp_idx + self.clc_padding_num_warps,
                     self.clc_tail_padding_warp_idx + self.clc_tail_padding_num_warps,
@@ -1095,7 +1089,7 @@ class FmhaDecodeConfig:
         """Require every boolean config field to carry a real Python bool."""
         for name, config_field in self.__dataclass_fields__.items():
             value = getattr(self, name)
-            if config_field.type in (bool, "bool") and not isinstance(value, bool):
+            if config_field.type is bool and not isinstance(value, bool):
                 raise TypeError(f"{name} must be a bool, got {type(value).__name__}")
 
     @property
@@ -1774,6 +1768,14 @@ def _finalize_static_decode_config(
     """Fill dtype-dependent, profile-dependent, and SMEM-derived defaults."""
     cfg.validate_boolean_fields()
     cfg.validate_dtypes()
+
+    if cfg.headdim == 64:
+        # H64's shared-KV path is more sensitive to Load/MMA descriptor
+        # register pressure. Paying for a larger Load/MMA/Padding budget from
+        # Softmax keeps the total under the SM register file limit and avoids
+        # the long-sequence scoreboard regression.
+        _set_if_implicit(cfg, "softmax_regs", 168, explicit_fields)
+        _set_if_implicit(cfg, "mma_load_regs", 72, explicit_fields)
 
     use_keeps_mma_ab = cfg.use_keeps_mma_ab
     if not use_keeps_mma_ab and cfg.headdim > 128:
@@ -2456,7 +2458,10 @@ def _apply_auto_grouped_q_mma_config(
         for recipe in supported
     )
     if has_underfilled_q_grid:
-        selected = select_grouped_q_launch_candidate(supported)
+        selected = select_grouped_q_launch_candidate(
+            supported,
+            headdim=cfg.headdim,
+        )
     else:
         # Every legal Q grid already fills the machine, so splitting cannot
         # expose otherwise-idle SMs. Compare direct recipes with the same
@@ -2466,7 +2471,10 @@ def _apply_auto_grouped_q_mma_config(
         direct = tuple(recipe for recipe in supported if recipe.splits_kv == 1)
         if not direct:
             return None
-        selected = select_grouped_q_direct_wave_candidate(direct)
+        selected = select_grouped_q_direct_wave_candidate(
+            direct,
+            headdim=cfg.headdim,
+        )
     _apply_grouped_q_mma_candidate(cfg, selected.mma)
     if selected.splits_kv == 1 and selected.base_ctas > service_capacity:
         # CLC persistence pays for work discovery by reusing one resident CTA

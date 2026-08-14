@@ -44,6 +44,7 @@ import cutlass
 import cutlass.cute as cute
 from cutlass.experimental import primitives as prims
 from cutlass import Boolean, Float32, Int16, Int32, Int64
+from cutlass.experimental import primitives as cprims
 
 from cutlass.experimental.task_scheduling.resources import (
     MemoryResource,
@@ -760,12 +761,12 @@ class PageOffsetWindowResource(HighThroughputMlaResource):
                 else page_lane_base
             )
             cached_k[pk] = Int32(
-                prims.shfl_sync(
+                cprims.shfl_sync(
                     thread_mask=0xFFFFFFFF,
                     val=cached_window_page,
                     offset=source_lane,
                     mask_and_clamp=0x1F,
-                    kind=prims.Shfl.IDX,
+                    kind=cprims.Shfl.IDX,
                 )
             )
 
@@ -776,12 +777,12 @@ class PageOffsetWindowResource(HighThroughputMlaResource):
                 else page_lane_base + Int32(pk)
             )
             cached_next_v[pk] = Int32(
-                prims.shfl_sync(
+                cprims.shfl_sync(
                     thread_mask=0xFFFFFFFF,
                     val=cached_window_page,
                     offset=source_lane,
                     mask_and_clamp=0x1F,
-                    kind=prims.Shfl.IDX,
+                    kind=cprims.Shfl.IDX,
                 )
             )
         return cached_k, cached_v, cached_next_v, cached_window_page
@@ -1204,7 +1205,7 @@ class SmemKVResource(HighThroughputMlaResource):
 
         sk_ptr = self.smem_kv.data_ptr(stage_idx * kc_copy_elems)
         desc = Int64(
-            prims.Tcgen05SmemDesc.build(
+            cprims.Tcgen05SmemDesc.build(
                 start_address=sk_ptr.toint(Int32),
                 leading_byte_offset=leading_byte_offset,
                 stride_byte_offset=stride_byte_offset,
@@ -1237,7 +1238,7 @@ class SmemKVResource(HighThroughputMlaResource):
 
         svc_ptr = self.smem_kv.data_ptr(stage_idx * svc_copy_elems)
         desc = Int64(
-            prims.Tcgen05SmemDesc.build(
+            cprims.Tcgen05SmemDesc.build(
                 start_address=svc_ptr.toint(Int32),
                 leading_byte_offset=leading_byte_offset,
                 stride_byte_offset=stride_byte_offset,
@@ -1411,7 +1412,7 @@ class SmemKResource(HighThroughputMlaResource):
 
         sk_ptr = self.smem_k.data_ptr(subtile_offset)
         desc = Int64(
-            prims.Tcgen05SmemDesc.build(
+            cprims.Tcgen05SmemDesc.build(
                 start_address=sk_ptr.toint(Int32),
                 leading_byte_offset=leading_byte_offset,
                 stride_byte_offset=stride_byte_offset,
@@ -1566,7 +1567,7 @@ class SmemVResource(HighThroughputMlaResource):
         )
         svc_ptr = self.smem_v.data_ptr(subtile_offset)
         desc = Int64(
-            prims.Tcgen05SmemDesc.build(
+            cprims.Tcgen05SmemDesc.build(
                 start_address=svc_ptr.toint(Int32),
                 leading_byte_offset=leading_byte_offset,
                 stride_byte_offset=stride_byte_offset,
@@ -1606,7 +1607,7 @@ class SmemVResource(HighThroughputMlaResource):
         )
         svc_ptr = self.smem_v.data_ptr(subtile_offset)
         desc = Int64(
-            prims.Tcgen05SmemDesc.build(
+            cprims.Tcgen05SmemDesc.build(
                 start_address=svc_ptr.toint(Int32),
                 leading_byte_offset=leading_byte_offset,
                 stride_byte_offset=stride_byte_offset,
@@ -1825,7 +1826,7 @@ class TmemSResource(HighThroughputMlaResource):
         tmem_s_addr = self.tmem_base_addr + 64 * stage_info.stage_idx
         tmem_s_ptr = prims.make_tmem_ptr(tmem_s_addr, Float32)
 
-        idesc_qk = prims.Tcgen05InstrDesc.build(
+        idesc_qk = cprims.Tcgen05InstrDesc.build(
             c_dtype=Float32,
             a_dtype=qkv_dtype(cfg),
             b_dtype=qkv_dtype(cfg),
@@ -1859,7 +1860,7 @@ class TmemSResource(HighThroughputMlaResource):
                     logical_call_idx * qc_copy_elems
                 )
                 desc_q = Int64(
-                    prims.Tcgen05SmemDesc.build(
+                    cprims.Tcgen05SmemDesc.build(
                         start_address=q_smem_ptr.toint(Int32),
                         leading_byte_offset=qk_desc_leading_byte_offset(cfg),
                         stride_byte_offset=qk_desc_stride_byte_offset(cfg),
@@ -1893,7 +1894,7 @@ class TmemSResource(HighThroughputMlaResource):
             q_rope_rows = cutlass.const_expr(cfg.mma_qk_tiler[0] // cfg.num_mma_ctas)
             q_rope_dim = cutlass.const_expr(cfg.mma_qk_rope_tiler[2])
             desc_qr = Int64(
-                prims.Tcgen05SmemDesc.build(
+                cprims.Tcgen05SmemDesc.build(
                     start_address=q_rope_smem_ptr.toint(Int32),
                     leading_byte_offset=qk_desc_leading_byte_offset_for_head_dim(
                         cfg, q_rope_rows, q_rope_dim
@@ -2506,7 +2507,7 @@ class SmemPResource(HighThroughputMlaResource):
         )
         sp_ptr = self.smem_p.data_ptr(stage_info.stage_idx * sp_stage_stride_elems)
         desc_p = Int64(
-            prims.Tcgen05SmemDesc.build(
+            cprims.Tcgen05SmemDesc.build(
                 start_address=sp_ptr.toint(Int32),
                 leading_byte_offset=p_desc_leading_byte_offset(cfg),
                 stride_byte_offset=p_desc_stride_byte_offset(cfg),
@@ -2610,7 +2611,7 @@ class TmemCorrResource(HighThroughputMlaResource):
         correction_regs[0] = row_sum_out
         correction_regs[1] = row_max_new
         correction_regs[2] = correction_factor_out
-        correction_regs[3] = prims.mov_b32(no_correction_out, target_type=Float32)
+        correction_regs[3] = cprims.mov_b32(no_correction_out, target_type=Float32)
 
         prims.tcgen05_st(
             TCGEN05_32B_SHAPE,
@@ -2740,11 +2741,7 @@ class TmemCorrResource(HighThroughputMlaResource):
             3,
             Float32,
         )
-        row_sum = row_sum + peer_ptr.load()
-        prims.barrier_cta_sync(
-            cfg.epilogue_sync_bar_id, thread_count=cfg.epilogue_sync_threads
-        )
-        return row_sum, row_max
+        return row_sum + peer_ptr.load(), row_max
 
 
 # =====================================================================
@@ -2785,7 +2782,7 @@ class TmemOResource(HighThroughputMlaResource):
         """
         cfg = self.cfg
 
-        idesc_pv = prims.Tcgen05InstrDesc.build(
+        idesc_pv = cprims.Tcgen05InstrDesc.build(
             c_dtype=Float32,
             a_dtype=qkv_dtype(cfg),
             b_dtype=qkv_dtype(cfg),
@@ -2872,7 +2869,7 @@ class TmemOResource(HighThroughputMlaResource):
         tmem_o_base_addr = self.tmem_base_addr + cfg.tmem_o_offset
         tmem_o_addr = tmem_o_base_addr + pv_j * 128
 
-        idesc_pv = prims.Tcgen05InstrDesc.build(
+        idesc_pv = cprims.Tcgen05InstrDesc.build(
             c_dtype=Float32,
             a_dtype=qkv_dtype(cfg),
             b_dtype=qkv_dtype(cfg),
@@ -3089,9 +3086,6 @@ class GmemOResource(HighThroughputMlaResource):
             Float32,
         )
         row_sum = row_sum + peer_ptr.load()
-        prims.barrier_cta_sync(
-            cfg.epilogue_sync_bar_id, thread_count=cfg.epilogue_sync_threads
-        )
 
         # TMEM address for O — use local tidx within 4-warp correction group
         tmem_base_addr = self.tmem_o_ref.tmem_base_addr

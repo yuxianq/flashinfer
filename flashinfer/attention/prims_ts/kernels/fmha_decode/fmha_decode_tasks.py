@@ -699,30 +699,6 @@ class DecodeGenTask(Task):
         self._seq_len_kv = seq_len_kv
         tile_size_kv = cutlass.Int32(self.cfg.tile_size_kv)
 
-        # Q-independent full-K nonsplit decode has no leading window skip.
-        # Resolve its runtime loop span directly and avoid repeating the general
-        # causal/window/split coordinate construction in every task warp.
-        if cutlass.const_expr(
-            not self.cfg.use_split_kv
-            and not self.cfg.uses_runtime_q_kv_union
-            and not self.cfg.use_sliding_window_causal
-        ):
-            total_kv_tiles = (
-                seq_len_kv + tile_size_kv - cutlass.Int32(1)
-            ) // tile_size_kv
-            self._kv_window_start = cutlass.Int32(0)
-            self._kv_valid_tile_end = total_kv_tiles
-            self._kv_raw_tile_base = cutlass.Int32(0)
-            remaining_kv_tiles = cute.math.max(
-                total_kv_tiles - cutlass.Int32(self.cfg.num_insts_kv),
-                cutlass.Int32(0),
-            )
-            num_insts_kv = cutlass.Int32(self.cfg.num_insts_kv)
-            loop_domain = (
-                remaining_kv_tiles + num_insts_kv - cutlass.Int32(1)
-            ) // num_insts_kv
-            return loop_domain + cutlass.Int32(self.domain_bias)
-
         # Decode the logical Q tile with the configured physical split fanout,
         # then derive its causal/window K union and useful runtime split prefix.
         q_group_cta_idx = cutlass.Int32(tile_coord[0])
@@ -786,7 +762,7 @@ class DecodeGenTask(Task):
 
 
 # ======================================================================
-# LoadTask — warp 13 (or warp 15 under CLC persistent), 1 warp
+# LoadTask — warp 13 (or warp 15 under CLC persistent), 1 warp, mma_load_regs
 # K and V share a single SmemKv ring; loads alternate K and V tiles.
 #   HEAD:    Q + K0 + K1
 #   LOOP[i]: K(i+2) + V(i)
@@ -947,7 +923,7 @@ def create_load_task(
         warp_idx=cfg.load_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.load_num_warps if num_warps is None else num_warps,
         schedule=captured_schedule,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="LoadTask",
         **kw,
     )
@@ -1030,7 +1006,7 @@ def create_page_offsets_task(
         warp_idx=cfg.page_offsets_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.page_offsets_num_warps if num_warps is None else num_warps,
         schedule=captured_schedule,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="PageTableTask",
         **kw,
     )
@@ -1108,7 +1084,7 @@ def create_page_offsets_task_split_kv(
         warp_idx=cfg.page_offsets_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.page_offsets_num_warps if num_warps is None else num_warps,
         schedule=schedule_result,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="PageTableTask",
         **kw,
     )
@@ -1167,7 +1143,7 @@ def create_page_offsets_task_one_inst_qkv(
         warp_idx=cfg.page_offsets_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.page_offsets_num_warps if num_warps is None else num_warps,
         schedule=schedule_result,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="PageTableTask",
         **kw,
     )
@@ -1402,7 +1378,7 @@ def create_load_task_split_kv(
         warp_idx=cfg.load_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.load_num_warps if num_warps is None else num_warps,
         schedule=schedule_result,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="LoadTask",
         **kw,
     )
@@ -1551,7 +1527,7 @@ def create_load_task_one_inst_qkv(
         warp_idx=cfg.load_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.load_num_warps if num_warps is None else num_warps,
         schedule=schedule_result,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="LoadTask",
         **kw,
     )
@@ -1903,7 +1879,7 @@ def create_mma_task_split_kv(
         warp_idx=cfg.mma_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.mma_num_warps if num_warps is None else num_warps,
         schedule=schedule_result,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="MmaTask",
         **kw,
     )
@@ -2069,14 +2045,14 @@ def create_mma_task_one_inst_qkv(
         warp_idx=cfg.mma_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.mma_num_warps if num_warps is None else num_warps,
         schedule=schedule_result,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="MmaTask",
         **kw,
     )
 
 
 # ======================================================================
-# MmaTask — warp 12, 1 warp
+# MmaTask — warp 12, 1 warp, mma_load_regs
 # K and V share a single SmemKv ring; each MMA loop iter consumes 4 stages
 # (K0, V0, K1, V1) of the shared buffer.
 #   HEAD: wait Q, BMM1(K0), BMM1(K1)
@@ -2270,14 +2246,14 @@ def create_mma_task(
         warp_idx=cfg.mma_warp_idx,
         num_warps=cfg.mma_num_warps,
         schedule=captured_schedule,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="MmaTask",
         **kw,
     )
 
 
 # ======================================================================
-# Softmax0Task — warps 0-3, 4 warps
+# Softmax0Task — warps 0-3, 4 warps, 184 regs
 # LOOP: consume S, produce stats + P + running sum
 # LoopLastIter: emit final sum/max for correction tail
 # ======================================================================
@@ -2490,14 +2466,14 @@ def create_softmax0_task(
         warp_idx=cfg.softmax0_warp_idx,
         num_warps=cfg.softmax0_num_warps,
         schedule=schedule_result,
-        num_registers=cfg.softmax_task_num_registers,
+        num_registers=cfg.softmax_regs,
         name="Softmax0Task",
         **kw,
     )
 
 
 # ======================================================================
-# Softmax1Task — warps 4-7, 4 warps
+# Softmax1Task — warps 4-7, 4 warps, 184 regs
 # ======================================================================
 def create_softmax1_task(
     tmem_s1: MemoryResource,
@@ -2697,14 +2673,14 @@ def create_softmax1_task(
         warp_idx=cfg.softmax1_warp_idx,
         num_warps=cfg.softmax1_num_warps,
         schedule=schedule_result,
-        num_registers=cfg.softmax_task_num_registers,
+        num_registers=cfg.softmax_regs,
         name="Softmax1Task",
         **kw,
     )
 
 
 # ======================================================================
-# CorrectionTask — warps 8-11, 4 warps
+# CorrectionTask — warps 8-11, 4 warps, 88 regs
 # HEAD: drain initial softmax-local stats
 # LOOP: correct O0 / O1 in-place before the next BMM2 accumulation
 # TAIL: combine final O0/O1, normalize, store to GMEM
@@ -2890,8 +2866,6 @@ def create_correction_task(
         )
         old_max_arr = local0_state[0]
         new_max_arr = local0_state[1]
-        inst0_new_max_arr = local0_state[4]
-        inst0_sum_arr = local0_state[5]
         tmem_o.wait()
         o_stage_idx, tail_0, tail_1 = tmem_o.update_o_stage_tail(
             tail_o_stage_idx_0=tail_0,
@@ -2904,10 +2878,6 @@ def create_correction_task(
             tail_o_stage_idx_1=tail_1,
             old_max_arr=old_max_arr,
             new_max_arr=new_max_arr,
-            inst0_new_max_arr=inst0_new_max_arr,
-            inst0_sum_arr=inst0_sum_arr,
-            inst1_new_max_arr=inst0_new_max_arr,
-            inst1_sum_arr=inst0_sum_arr,
         )
         # TAIL inst1: consume final stats for the second instance. This call
         # performs the final two-instance normalization and output store.
@@ -2919,8 +2889,6 @@ def create_correction_task(
         )
         old_max_arr = local1_state[0]
         new_max_arr = local1_state[1]
-        inst1_new_max_arr = local1_state[4]
-        inst1_sum_arr = local1_state[5]
         tmem_o.wait()
         o_stage_idx, tail_0, tail_1 = tmem_o.update_o_stage_tail(
             tail_o_stage_idx_0=tail_0,
@@ -2933,10 +2901,6 @@ def create_correction_task(
             tail_o_stage_idx_1=tail_1,
             old_max_arr=old_max_arr,
             new_max_arr=new_max_arr,
-            inst0_new_max_arr=inst0_new_max_arr,
-            inst0_sum_arr=inst0_sum_arr,
-            inst1_new_max_arr=inst1_new_max_arr,
-            inst1_sum_arr=inst1_sum_arr,
         )
         # Inst1 final reduction consumes both O0 and O1, so defer O0 release
         # until after inst1 has finished reading it.
@@ -3072,7 +3036,7 @@ def create_correction_task(
         warp_idx=cfg.correction_warp_idx,
         num_warps=cfg.correction_num_warps,
         schedule=captured_schedule,
-        num_registers=cfg.correction_task_num_registers,
+        num_registers=cfg.correction_regs,
         name="CorrectionTask",
         **kw,
     )
@@ -3230,8 +3194,6 @@ def create_correction_task_one_inst_qkv(
             tmem_softmax_local.release()
         old_max_arr = local_state[0]
         new_max_arr = local_state[1]
-        inst_new_max_arr = local_state[4]
-        inst_sum_arr = local_state[5]
         # ConsWait/ConsWork: consume the final O stage produced by BMM2.
         tmem_o.wait()
         o_stage_idx, tail_0, tail_1 = tmem_o.update_o_stage_tail(
@@ -3246,10 +3208,6 @@ def create_correction_task_one_inst_qkv(
             tail_o_stage_idx_1=tail_1,
             old_max_arr=old_max_arr,
             new_max_arr=new_max_arr,
-            inst0_new_max_arr=inst_new_max_arr,
-            inst0_sum_arr=inst_sum_arr,
-            inst1_new_max_arr=inst_new_max_arr,
-            inst1_sum_arr=inst_sum_arr,
         )
         # ConsRelease: the final O stage is no longer needed.
         tmem_o.release()
@@ -3301,7 +3259,7 @@ def create_correction_task_one_inst_qkv(
         warp_idx=cfg.correction_warp_idx,
         num_warps=cfg.correction_num_warps,
         schedule=schedule_result,
-        num_registers=cfg.correction_task_num_registers,
+        num_registers=cfg.correction_regs,
         name="CorrectionTask",
         **kw,
     )
@@ -3346,7 +3304,7 @@ def create_padding_task(
         warp_idx=cfg.padding_warp_idx if warp_idx is None else warp_idx,
         num_warps=cfg.padding_num_warps if num_warps is None else num_warps,
         schedule=captured_schedule,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="PaddingTask",
         **kw,
     )
@@ -3402,7 +3360,7 @@ def create_scheduler_task(
         warp_idx=cfg.scheduler_warp_idx,
         num_warps=cfg.scheduler_num_warps,
         schedule=captured_schedule,
-        num_registers=cfg.mma_load_task_num_registers,
+        num_registers=cfg.mma_load_regs,
         name="SchedulerTask",
         **kw,
     )

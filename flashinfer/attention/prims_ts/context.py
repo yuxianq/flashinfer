@@ -27,15 +27,10 @@ head-paired GQA.
 Causal windows are bottom-right aligned: for row ``q``, the inclusive right
 position is ``q + (S_kv - S_q)`` and ``window_left`` is measured from that
 position.
-
-PrimTS context entry points are intentionally excluded from ``fi_trace`` for
-now; unlike the decode APIs, their ``@flashinfer_api`` decorators do not
-register trace templates.
 """
 
 from dataclasses import dataclass
 import functools
-import itertools
 import math
 import numbers
 import struct
@@ -324,7 +319,9 @@ def _read_indptr(
             f"the final {name} offset must equal the packed tensor extent; "
             f"expected {expected_total}, got {values[-1]}"
         )
-    lengths = tuple(curr - prev for prev, curr in itertools.pairwise(values))
+    lengths = tuple(
+        curr - prev for prev, curr in zip(values[:-1], values[1:], strict=True)
+    )
     if any(length <= 0 for length in lengths):
         raise ValueError(f"{name} offsets must be strictly increasing")
     return values, lengths
@@ -1774,6 +1771,8 @@ class BatchPrefillPagedTSWrapper:
         scale_softmax_log2 = _validate_scale(
             sm_scale * math.log2(math.e), "sm_scale * log2(e)"
         )
+        compiled, policy = _get_compiled_paged_context(*_paged_semantic_key(geometry))
+
         scale_tensor = torch.tensor(
             [scale_softmax_log2], dtype=torch.float32, device=geometry.device
         )
@@ -1795,10 +1794,6 @@ class BatchPrefillPagedTSWrapper:
             2,
             geometry.max_num_pages_per_seq_kv,
         )
-
-        # Keep all runtime tensor allocation ahead of CUTLASS JIT, matching
-        # BatchPrefillTSWrapper.plan and its compute-sanitizer ordering.
-        compiled, policy = _get_compiled_paged_context(*_paged_semantic_key(geometry))
 
         # Publish only after validation, compilation, and allocation succeed.
         self._geometry = geometry
@@ -1959,8 +1954,8 @@ def batch_prefill_with_paged_kv_cache(
 
 
 __all__ = [
-    "BatchPrefillPagedTSWrapper",
     "BatchPrefillTSWrapper",
+    "BatchPrefillPagedTSWrapper",
     "batch_prefill",
     "batch_prefill_with_paged_kv_cache",
 ]

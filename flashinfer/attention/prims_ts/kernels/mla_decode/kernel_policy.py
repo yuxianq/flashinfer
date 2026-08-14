@@ -32,9 +32,7 @@ from ``make_throughput_latency_mla_config``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypedDict, cast
-
-from typing_extensions import Unpack
+from typing import Literal, cast
 
 from .helpers.constants import SUPPORTED_MLA_PAGE_SIZES
 from .throughput_latency_1cta.config import (
@@ -50,16 +48,6 @@ MlaKernelPolicy = Literal["throughput_2cta", "throughput_latency_1cta"]
 
 MlaKernelName = MlaKernelPolicy
 """Concrete TS MLA kernel family selected for a launch."""
-
-
-class _AutomaticMlaWork(TypedDict, total=False):
-    """Optional occupancy inputs accepted by automatic family selection."""
-
-    one_cta_work: int | None
-    one_cta_capacity: int | None
-    two_cta_cluster_work: int | None
-    two_cta_cluster_capacity: int | None
-    one_cta_is_extended_fp8_swaps: bool
 
 
 @dataclass(frozen=True)
@@ -162,8 +150,8 @@ def resolve_mla_kernel_policy(
     policy: str | None,
     num_heads: int,
     seq_len_q: int,
-    **automatic_work: Unpack[_AutomaticMlaWork],
-) -> tuple[MlaKernelPolicy, str]:
+    **automatic_work,
+):
     """Resolve an explicit or automatic TS MLA kernel policy."""
 
     if policy in (None, "", "auto"):
@@ -310,11 +298,17 @@ def select_mla_ts_kernel(
         "e4m3",
     )
     throughput_latency_candidate = supported_dtype_pair and bool(profiles)
+    explicit_split_requested = (
+        throughput_latency_split_kv is not None and throughput_latency_split_kv > 0
+    )
     default_profile = None
     if throughput_latency_candidate:
-        default_profile = throughput_latency_profile
-        if default_profile is None and profile_names:
+        if explicit_split_requested:
             default_profile = profile_names[0]
+        else:
+            default_profile = throughput_latency_profile
+            if default_profile is None and profile_names:
+                default_profile = profile_names[0]
 
     if requested_policy == "throughput_2cta":
         reason = (

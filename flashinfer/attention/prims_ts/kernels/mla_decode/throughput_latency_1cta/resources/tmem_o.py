@@ -213,10 +213,9 @@ class TmemOResource(MlaResource):
                 self._pv_o_base_addr(stage_info, v_subtile_idx=v_subtile_idx),
                 Float32,
             )
-            mma_k_step = mma_k_step_for_qkv(cfg)
-            k_block_count = cfg.tile_size_kv // mma_k_step
-            k_blocks_per_smem_row = 128 // (mma_k_step * cfg.qkv_dtype_bytes)
-            for k_block in cutlass.range_constexpr(k_block_count):
+            for k_block in cutlass.range_constexpr(
+                cfg.tile_size_kv // mma_k_step_for_qkv(cfg)
+            ):
                 prims.tcgen05_mma(
                     mma_kind_for_qkv(cfg),
                     prims.CTAGroup.CTA_1,
@@ -227,9 +226,11 @@ class TmemOResource(MlaResource):
                     scale_d,
                 )
                 scale_d = Boolean(True)
-                if cutlass.const_expr(k_block + 1 < k_block_count):
+                if cutlass.const_expr(
+                    k_block + 1 < cfg.tile_size_kv // mma_k_step_for_qkv(cfg)
+                ):
                     v_desc = v_desc + Int32(256 if cfg.is_fp8_qkv() else 128)
-                    if cutlass.const_expr((k_block + 1) % k_blocks_per_smem_row == 0):
+                    if cutlass.const_expr(k_block == 3):
                         p_desc = p_desc.advance_start_address(
                             Int32(q_p_desc_k_block_wrap_bytes(cfg))
                         )
