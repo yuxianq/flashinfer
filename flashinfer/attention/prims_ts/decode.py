@@ -14,6 +14,7 @@
 
 """Task-scheduled paged decode with a FlashInfer-style plan/run lifecycle."""
 
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
 import functools
@@ -1228,9 +1229,12 @@ def _get_compiled_decode(
     window_left: int,
     kv_prefix_mode: Literal["dynamic", "planned_full"] = "dynamic",
     kv_lengths_mode: Literal["dynamic", "planned_uniform_max"] = "dynamic",
+    enable_pdl: bool = False,
 ):
     """Compile and cache one exact semantic TS decode plan."""
 
+    if type(enable_pdl) is not bool:
+        raise TypeError("enable_pdl must be a bool")
     if kv_prefix_mode not in ("dynamic", "planned_full"):
         raise ValueError(f"unsupported KV-prefix compile mode {kv_prefix_mode!r}")
     if kv_lengths_mode not in ("dynamic", "planned_uniform_max"):
@@ -1269,7 +1273,7 @@ def _get_compiled_decode(
         use_packed_q,
         window_left,
     )
-    cfg = spec.config
+    cfg = dataclasses.replace(spec.config, use_external_pdl=enable_pdl)
     max_active_clusters = spec.max_active_clusters
     partial_o_shape, partial_stats_shape, counter_shape = spec.scratch_shapes
     partial_dtype = output_dtype
@@ -1544,6 +1548,7 @@ def _get_compiled_decode(
     policy = spec.policy + (
         ("kv_prefix_mode", kv_prefix_mode),
         ("kv_lengths_mode", kv_lengths_mode),
+        ("use_external_pdl", enable_pdl),
     )
     return compiled_main, compiled_reducer, policy, spec.scratch_shapes
 
@@ -2000,7 +2005,7 @@ def prims_ts_batch_decode_with_kv_cache(
             workspace_buffer=workspace_buffer,
         )
     compiled_main, compiled_reducer, _, scratch_shapes = _get_compiled_decode(
-        *semantic_key, "dynamic", "dynamic"
+        *semantic_key, "dynamic", "dynamic", False
     )
     if scratch_shapes != spec.scratch_shapes:
         raise RuntimeError("FMHA workspace policy changed during compilation")
