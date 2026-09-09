@@ -62,6 +62,12 @@ _REQUIRES_CONTEXT_GPU = pytest.mark.skipif(
     reason="PrimTS context attention requires SM100 or SM103",
 )
 
+_REQUIRES_LDTM_STAT = pytest.mark.skipif(
+    not torch.cuda.is_available()
+    or not context_module._default_uses_ldtm_stat(torch.cuda.current_device()),
+    reason="requires _default_uses_ldtm_stat",
+)
+
 _HEAD_DIM = 128
 _FP8 = torch.float8_e4m3fn
 
@@ -2606,10 +2612,53 @@ def test_attention_ts_context_heavy_first_static_raster_policy(
     )
 
 
+def test_attention_ts_context_uses_ldtm_stat_default_is_off():
+    """FmhaTs stays off unless requested; the runner enables it on SM103/SM107."""
+    from flashinfer.attention.prims_ts.kernels.fmha_context.fmha_resources import (
+        FmhaConfig,
+    )
+
+    assert FmhaConfig().uses_ldtm_stat is False
+
+    default_fmha = FmhaTs(
+        qk_acc_dtype=Float32,
+        pv_acc_dtype=Float32,
+        d=128,
+        is_persistent=True,
+    )
+    assert default_fmha.cfg.uses_ldtm_stat is False
+
+    enabled_fmha = FmhaTs(
+        qk_acc_dtype=Float32,
+        pv_acc_dtype=Float32,
+        d=128,
+        is_persistent=True,
+        uses_ldtm_stat=True,
+    )
+    assert enabled_fmha.cfg.uses_ldtm_stat is True
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_attention_ts_context_uses_ldtm_stat_default_follows_gpu():
+    """Context attention enables LDTM.STAT on B300 (SM103) and Rubin (SM107)."""
+    expected = (
+        context_module._dsl_supports_ldtm_stat()
+        and torch.cuda.get_device_capability() in ((10, 3), (10, 7))
+    )
+    assert (
+        context_module._default_uses_ldtm_stat(torch.cuda.current_device()) is expected
+    )
+
+
 @pytest.mark.parametrize("head_dim", (128, 256))
 @pytest.mark.parametrize("input_dtype", (Float8E4M3FN, BFloat16), ids=("fp8", "bf16"))
-def test_attention_ts_context_contiguous_schedule_builds(head_dim, input_dtype):
-    """Contiguous task graphs build without paged metadata dependencies or JIT."""
+@pytest.mark.parametrize(
+    "uses_ldtm_stat", (False, pytest.param(True, marks=_REQUIRES_LDTM_STAT))
+)
+def test_attention_ts_context_contiguous_schedule_builds(
+    head_dim, input_dtype, uses_ldtm_stat
+):
+    """Contiguous task graphs build with either row-max implementation."""
     kernel = FmhaTs(
         in_dtype=input_dtype,
         qk_acc_dtype=Float32,
@@ -2618,7 +2667,9 @@ def test_attention_ts_context_contiguous_schedule_builds(head_dim, input_dtype):
         is_persistent=True,
         is_causal=False,
         is_clc_dynamic=False,
+        uses_ldtm_stat=uses_ldtm_stat,
     )
+    assert kernel.cfg.uses_ldtm_stat is uses_ldtm_stat
     cfg = kernel.cfg
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)

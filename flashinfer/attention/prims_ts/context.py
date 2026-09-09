@@ -37,6 +37,7 @@ register trace templates.
 
 from dataclasses import dataclass
 import functools
+import importlib.metadata
 import itertools
 import math
 import numbers
@@ -265,6 +266,7 @@ def _make_context_kernel(
     has_q_offset: bool,
     causal_single_kv_tile: bool,
     scheduler: _ContextScheduler,
+    uses_ldtm_stat: bool,
     page_size: int | None = None,
     max_kv_len: int | None = None,
 ):
@@ -310,6 +312,7 @@ def _make_context_kernel(
         window_size_left=window_left if window_left > 0 else 0,
         h_r=num_qo_heads // num_kv_heads,
         enable_skip_correction=True,
+        uses_ldtm_stat=uses_ldtm_stat,
         causal_single_kv_tile=(causal_single_kv_tile and not use_paged_kv),
         **paged_kwargs,
     )
@@ -463,6 +466,31 @@ def _resolve_cuda_device(
         raise ValueError(f"device must be a CUDA device, got {resolved}")
     device_index = _validate_device(resolved)
     return torch.device("cuda", device_index), device_index
+
+
+@functools.cache
+def _dsl_supports_ldtm_stat() -> bool:
+    """True if nvidia-cutlass-dsl >= 4.8.0."""
+    try:
+        dsl_version = importlib.metadata.version("nvidia-cutlass-dsl")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    from packaging import version as pkg_version
+
+    try:
+        # Use .release so 4.8.0.dev* counts as >= 4.8.0.
+        return pkg_version.Version(dsl_version).release >= (4, 8, 0)
+    except pkg_version.InvalidVersion:
+        return False
+
+
+def _default_uses_ldtm_stat(device_index: int) -> bool:
+    """Enable LDTM.STAT on SM103/SM107 when nvidia-cutlass-dsl >= 4.8.0."""
+    if not _dsl_supports_ldtm_stat():
+        return False
+    # tcgen05.ld.red.max (LDTM.STAT) is available on B300 (SM103) and Rubin
+    # (SM107), not B200 (SM100).
+    return torch.cuda.get_device_capability(device_index) in ((10, 3), (10, 7))
 
 
 def _validate_mask(mask_type: str) -> None:
@@ -1363,6 +1391,7 @@ def _make_context_scheduler_probe(
         has_q_offset=geometry.has_q_offset,
         causal_single_kv_tile=causal_single_kv_tile,
         scheduler="static_persistent",
+        uses_ldtm_stat=_default_uses_ldtm_stat(geometry.device_index),
         page_size=page_size,
         max_kv_len=max_kv_len,
     )
@@ -1627,6 +1656,7 @@ def _get_compiled_context(
         has_q_offset=has_q_offset,
         causal_single_kv_tile=causal_single_kv_tile,
         scheduler=scheduler,
+        uses_ldtm_stat=_default_uses_ldtm_stat(device_index),
     )
     fmha.cfg.has_varlen = packed
     fmha.cfg.has_uniform_varlen = uniform_packed_lengths
@@ -1835,6 +1865,7 @@ def _get_compiled_paged_context(
         has_q_offset=has_q_offset,
         causal_single_kv_tile=False,
         scheduler=scheduler,
+        uses_ldtm_stat=_default_uses_ldtm_stat(device_index),
         page_size=page_size,
         max_kv_len=max_kv_len,
     )
