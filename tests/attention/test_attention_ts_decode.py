@@ -1,3 +1,4 @@
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 # Copyright (c) 2026 by FlashInfer team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -2621,6 +2622,7 @@ def test_attention_ts_decode_wrapper_has_compile_oriented_contract() -> None:
         "split_kv",
         "validate",
         "initialize_workspace",
+        "use_device_scales",
     )
     run_parameters = inspect.signature(BatchDecodePagedTSWrapper.run).parameters
     assert tuple(run_parameters) == (
@@ -2633,6 +2635,8 @@ def test_attention_ts_decode_wrapper_has_compile_oriented_contract() -> None:
         "qo_indptr",
         "bmm1_scale",
         "bmm2_scale",
+        "bmm1_scale_device",
+        "bmm2_scale_device",
         "out",
         "validate",
     )
@@ -2746,7 +2750,12 @@ def test_attention_ts_decode_public_surfaces_have_no_internal_tuning_knobs() -> 
     assert violations == []
 
 
-def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state():
+@pytest.mark.parametrize(
+    "output_dtype,use_device_scales", [(torch.float16, False), (torch.bfloat16, True)]
+)
+def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state(
+    output_dtype, use_device_scales
+):
     """Trace packed-Q shape and planned output dtype from the live wrapper."""
     from flashinfer.fi_trace import fi_trace
 
@@ -2761,6 +2770,10 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state():
         "block_tables": torch.tensor(((0, -1), (1, 2)), dtype=torch.int32),
         "qo_indptr": torch.tensor((0, 2, 5), dtype=torch.int32),
     }
+
+    if use_device_scales:
+        kwargs["bmm1_scale_device"] = torch.ones(1)
+        kwargs["bmm2_scale_device"] = torch.ones(1)
 
     with pytest.raises(
         ValueError,
@@ -2780,7 +2793,8 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state():
             "storage_page_size": 32,
             "use_packed_q": True,
             "seq_len_q": 3,
-            "output_dtype": torch.float16,
+            "output_dtype": output_dtype,
+            "use_device_scales": use_device_scales,
             "mask_type": "causal",
             "window_left": -1,
             "max_kv_len": 64,
@@ -2794,6 +2808,7 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state():
         "seq_lens",
         "block_tables",
         "qo_indptr",
+        *(("bmm1_scale_device", "bmm2_scale_device") if use_device_scales else ()),
     ):
         incomplete_kwargs = dict(kwargs)
         incomplete_kwargs.pop(required_name)
@@ -2801,7 +2816,10 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state():
             fi_trace(wrapper.run, **incomplete_kwargs)
 
     defn = fi_trace(wrapper.run, **kwargs)
-    assert defn["name"].startswith("prims_ts_decode_wrapper_tuple_fp16_output_packed_q")
+    dtype_suffix = "bf16" if output_dtype == torch.bfloat16 else "fp16"
+    assert defn["name"].startswith(
+        f"prims_ts_decode_wrapper_tuple_{dtype_suffix}_output_packed_q"
+    )
     assert defn["inputs"]["q"]["shape"] == [
         "total_q",
         "num_qo_heads",
@@ -2809,7 +2827,7 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state():
     ]
     assert defn["outputs"]["output"] == {
         "shape": ["total_q", "num_qo_heads", "head_dim"],
-        "dtype": "float16",
+        "dtype": str(output_dtype).removeprefix("torch."),
         "param": "out",
     }
     assert defn["axes"]["max_seq_len_q"]["value"] == 3
@@ -4855,6 +4873,7 @@ def test_attention_ts_decode_run_validate_false_skips_explicit_checks(
             "compiled_reducer": None,
             "planned_seq_lens_host": None,
             "planned_seq_lens_device": None,
+            "use_device_scales": False,
         },
     )()
     runtime = object()
@@ -4918,6 +4937,7 @@ def test_attention_ts_decode_run_validates_control_and_q_mode(
             "batch_size": 2,
             "planned_seq_lens_host": None,
             "planned_seq_lens_device": None,
+            "use_device_scales": False,
         },
     )()
     args = (object(), object(), object(), object())
@@ -4941,6 +4961,7 @@ def test_attention_ts_decode_run_validates_control_and_q_mode(
             "batch_size": 2,
             "planned_seq_lens_host": None,
             "planned_seq_lens_device": None,
+            "use_device_scales": False,
         },
     )()
     with pytest.raises(ValueError, match="qo_indptr cannot be used"):
@@ -5112,6 +5133,7 @@ def test_attention_ts_decode_run_requires_exactly_one_seq_lens_owner(
         {
             "planned_seq_lens_host": ((128,) if planned_seq_lens is not None else None),
             "planned_seq_lens_device": planned_seq_lens,
+            "use_device_scales": False,
             "kv_prefix_mode": "dynamic",
             "kv_lengths_mode": (
                 "planned_uniform_max" if planned_seq_lens is not None else "dynamic"
@@ -5151,6 +5173,7 @@ def test_attention_ts_decode_planned_full_dynamic_uses_owned_seq_lens(
             "compiled_reducer": None,
             "planned_seq_lens_host": (128, 127),
             "planned_seq_lens_device": planned_seq_lens,
+            "use_device_scales": False,
             "kv_prefix_mode": "planned_full",
             "kv_lengths_mode": "dynamic",
         },
