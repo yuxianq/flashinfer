@@ -1,3 +1,4 @@
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 # Copyright (c) 2025-2026 by FlashInfer team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -1269,13 +1270,18 @@ def _make_prims_ts_decode_wrapper_trace(
     plan_owns_seq_lens: bool,
     encoded_page_size: int = 0,
     split_kv: bool = True,
+    bf16_output: bool = False,
+    use_device_scales: bool = False,
 ):
     """Describe one plan-bound ``BatchDecodePagedTSWrapper.run`` call."""
 
     cache_form = "combined" if combined else "tuple"
     storage_axis = "storage_page_size" if encoded_page_size else "page_size"
     page_suffix = f"_encoded_page{encoded_page_size}" if encoded_page_size else ""
-    output_suffix = "_fp16_output" if fp16_output else ""
+    output_dtype = "bfloat16" if bf16_output else "float16" if fp16_output else None
+    output_suffix = (
+        "_bf16_output" if bf16_output else "_fp16_output" if fp16_output else ""
+    )
     q_axes, q_shape, output_shape, q_suffix = _fmha_q_schema(q_mode)
     axes: dict[str, Var | Const] = {
         **q_axes,
@@ -1385,6 +1391,10 @@ def _make_prims_ts_decode_wrapper_trace(
             ),
         }
     )
+    if use_device_scales:
+        axes["scale_size"] = Const(value=1, description="Per-tensor attention scale.")
+        inputs["bmm1_scale_device"] = Tensor(["scale_size"], dtype="float32")
+        inputs["bmm2_scale_device"] = Tensor(["scale_size"], dtype="float32")
     constraints = [
         "head_dim in (64, 128, 256)",
         "page_size in (4, 8, 16, 32, 64, 128)",
@@ -1420,6 +1430,7 @@ def _make_prims_ts_decode_wrapper_trace(
             f"prims_ts_decode_wrapper_{cache_form}{page_suffix}{output_suffix}{q_suffix}_{mask_type}"
             f"{'_plan_seq_lens' if plan_owns_seq_lens else ''}"
             f"{'_no_split' if not split_kv else ''}"
+            f"{'_device_scales' if use_device_scales else ''}"
         ),
         description=(
             "Reusable PrimTS GQA decode wrapper. The plan fixes mask, window, "
@@ -1438,8 +1449,8 @@ def _make_prims_ts_decode_wrapper_trace(
         outputs={
             "output": Tensor(
                 output_shape,
-                dtype="float16" if fp16_output else None,
-                dtype_from=None if fp16_output else "q",
+                dtype=output_dtype,
+                dtype_from=None if output_dtype else "q",
                 param="out",
             )
         },
@@ -1503,6 +1514,8 @@ def _get_prims_ts_decode_wrapper_trace(
     plan_owns_seq_lens: bool,
     encoded_page_size: int = 0,
     split_kv: bool = True,
+    bf16_output: bool = False,
+    use_device_scales: bool = False,
 ) -> TraceTemplate:
     """Return one stable trace template for a frozen FMHA plan identity."""
 
@@ -1519,6 +1532,8 @@ def _get_prims_ts_decode_wrapper_trace(
         plan_owns_seq_lens=plan_owns_seq_lens,
         encoded_page_size=encoded_page_size,
         split_kv=split_kv,
+        bf16_output=bf16_output,
+        use_device_scales=use_device_scales,
     )
 
 
@@ -1561,8 +1576,10 @@ def prims_ts_decode_wrapper_trace_dispatch(**kwargs):
             "Tracing BatchDecodePagedTSWrapper.run without plan-owned "
             "sequence lengths requires a per-run seq_lens tensor"
         )
+    use_device_scales = bool(getattr(state, "use_device_scales", False))
     required_metadata = (
         "block_tables",
+        *(("bmm1_scale_device", "bmm2_scale_device") if use_device_scales else ()),
         *(("qo_indptr",) if bool(state.use_packed_q) else ()),
     )
     _require_bound_trace_tensors(
@@ -1605,6 +1622,9 @@ def prims_ts_decode_wrapper_trace_dispatch(**kwargs):
         encoded_page_size=encoded_page_size,
         # Preserve caller permission, not whether this shape actually splits.
         split_kv=bool(dict(getattr(state, "policy", ())).get("split_kv_allowed", True)),
+        bf16_output=state.output_dtype == torch.bfloat16
+        and kwargs["q"].dtype != torch.bfloat16,
+        use_device_scales=use_device_scales,
     )
 
 
