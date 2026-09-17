@@ -328,3 +328,18 @@ split-KV, and resource-safety coverage lives in:
 pytest -q tests/attention/test_attention_ts_decode.py
 pytest -q tests/trace/test_fi_trace_template_consistency.py
 ```
+
+### FP8 KV cache with BF16 output
+
+FP8 E4M3 Q/K/V can produce FP16, BF16, or FP8 output. BF16 output is packed
+from the floating-point accumulator directly, including split-KV reduction.
+It does not pass through an FP8 output tensor. Q and K/V must still use the
+same dtype; callers with BF16 model activations must quantize Q first.
+
+For scales produced by GPU preprocessing, call `plan(use_device_scales=True)`
+and pass one-element float32 CUDA tensors as `bmm1_scale_device` and
+`bmm2_scale_device` to `run()`. These override the host scales. BMM1 uses the
+regular attention scale multiplied by the Q and K dequantization scales;
+BMM2 uses the V dequantization scale. Values must be finite and positive.
+The kernel reads the tensors on each launch, so changing their contents in
+place is supported during CUDA graph replay without host synchronization.

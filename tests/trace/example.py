@@ -1,3 +1,4 @@
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 """
 fi_trace example: generate flashinfer-bench definition JSON files via auto-dump.
 
@@ -54,6 +55,7 @@ mla_paged_decode_h16_ckv512_kpe64_ps64.json
 attention_ts_decode_tuple_multi_q_sq4_h32_kv4_d128_ps32.json
 prims_ts_batch_decode_tuple_multi_q_sq4_h32_kv4_d128_ps32_s2048.json
 prims_ts_decode_wrapper_tuple_multi_q_causal_sq4_maxq4_maxk2048_wl-1_pf0_um0_h32_kv4_d128_ps32.json
+prims_ts_decode_wrapper_tuple_bf16_output_causal_device_scales_maxq1_maxk256_wl-1_pf0_um0_h8_kv2_d128_ps32_scale_size1.json
 prims_ts_decode_mla_one_shot_h128_d_qk576_ckv512_kpe64_ps32_sq4.json
 prims_ts_batch_decode_mla_h128_d_qk576_ckv512_kpe64_ps32_s2048_sq4.json
 prims_ts_decode_mla_wrapper_causal_maxq4_maxk2048_h128_d_qk576_ckv512_kpe64_ps32_sq4.json
@@ -1831,6 +1833,42 @@ with contextlib.suppress(Exception):
         _pts_cache,
         _pts_seq_lens,
         _pts_block_tables,
+    )
+
+# PrimTS FP8 KV decode with BF16 output and device-resident scales.
+with contextlib.suppress(Exception):
+    from flashinfer.attention.prims_ts.decode import BatchDecodePagedTSWrapper
+
+    _pts_fp8_q = torch.randn(2, 8, 128, device=device).to(torch.float8_e4m3fn)
+    _pts_fp8_k = torch.randn(16, 2, 32, 128, device=device).to(torch.float8_e4m3fn)
+    _pts_fp8_v = torch.randn(16, 2, 32, 128, device=device).to(torch.float8_e4m3fn)
+    _pts_fp8_table = torch.arange(16, device=device, dtype=torch.int32).reshape(2, 8)
+    _pts_fp8_lengths = torch.tensor([251, 129], device=device, dtype=torch.int32)
+    _pts_fp8_bmm1 = torch.tensor([0.25 / 128**0.5], device=device)
+    _pts_fp8_bmm2 = torch.tensor([1.75], device=device)
+    _pts_fp8_out = torch.empty_like(_pts_fp8_q, dtype=torch.bfloat16)
+    _pts_fp8_wrapper = BatchDecodePagedTSWrapper()
+    _pts_fp8_wrapper.plan(
+        device,
+        2,
+        8,
+        2,
+        128,
+        32,
+        256,
+        q_data_type=torch.float8_e4m3fn,
+        o_data_type=torch.bfloat16,
+        mask_type="causal",
+        use_device_scales=True,
+    )
+    _pts_fp8_wrapper.run(
+        _pts_fp8_q,
+        (_pts_fp8_k, _pts_fp8_v),
+        _pts_fp8_lengths,
+        _pts_fp8_table,
+        bmm1_scale_device=_pts_fp8_bmm1,
+        bmm2_scale_device=_pts_fp8_bmm2,
+        out=_pts_fp8_out,
     )
 
 # PrimTS MLA decode: the same causal SQ4 contract through all three public
