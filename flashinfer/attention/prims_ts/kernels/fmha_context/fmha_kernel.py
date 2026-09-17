@@ -670,6 +670,7 @@ def build_context_task_manager(
     variable_window_q_stride: int | Int32 = 0,
     scale_softmax_log2: cute.Tensor | None = None,
     output_scale: cute.Tensor | None = None,
+    softmax_stats: cute.Tensor | None = None,
     g_block_tables: cute.Pointer | None = None,
     block_table_row_stride: int | Int32 = 0,
     g_seq_lens_kv: cute.Pointer | None = None,
@@ -1114,6 +1115,9 @@ def build_context_task_manager(
         tmem_vec_offset=cfg.tmem_vec0_offset,
         scale_softmax_log2=scale_softmax_log2,
         output_scale=output_scale,
+        softmax_stats=softmax_stats,
+        cum_seqlen_q=cum_seqlen_q,
+        q_half=0,
         name="tmem_vec0",
     )
     smem_o_0 = SmemOResource(
@@ -1169,6 +1173,9 @@ def build_context_task_manager(
             tmem_vec_offset=cfg.tmem_vec1_offset,
             scale_softmax_log2=scale_softmax_log2,
             output_scale=output_scale,
+            softmax_stats=softmax_stats,
+            cum_seqlen_q=cum_seqlen_q,
+            q_half=1,
             name="tmem_vec1",
         )
         smem_o_1 = SmemOResource(
@@ -2258,6 +2265,7 @@ def build_fmha_task_manager(
     variable_window_q_stride: int | Int32 = 0,
     scale_softmax_log2: cute.Tensor | None = None,
     output_scale: cute.Tensor | None = None,
+    softmax_stats: cute.Tensor | None = None,
     q_offset: int | Int32 = 0,
     g_block_tables: cute.Pointer | None = None,
     block_table_row_stride: int | Int32 = 0,
@@ -2350,6 +2358,7 @@ def build_fmha_task_manager(
         variable_window_q_stride=variable_window_q_stride,
         scale_softmax_log2=scale_softmax_log2,
         output_scale=output_scale,
+        softmax_stats=softmax_stats,
         g_block_tables=g_block_tables,
         block_table_row_stride=block_table_row_stride,
         g_seq_lens_kv=g_seq_lens_kv,
@@ -2681,6 +2690,7 @@ class FmhaTs:
         variable_window_token_starts: cute.Tensor | None = None,
         variable_window_token_ends: cute.Tensor | None = None,
         variable_window_cta_starts: cute.Tensor | None = None,
+        softmax_stats: cute.Tensor | None = None,
     ) -> None:
         """Set up TMA descriptors, compute grid, and launch the kernel.
 
@@ -2958,6 +2968,7 @@ class FmhaTs:
             tile_sched_params,
             scale_softmax_log2,
             output_scale,
+            softmax_stats,
             num_kv_tiles,
             num_seq_tiles,
             q_offset,
@@ -2998,6 +3009,7 @@ class FmhaTs:
         ),
         scale_softmax_log2: cute.Tensor,
         output_scale: cute.Tensor,
+        softmax_stats: cute.Tensor | None,
         num_kv_tiles: Int32,
         num_seq_tiles: Int32,
         q_offset: Int32,
@@ -3074,6 +3086,7 @@ class FmhaTs:
             variable_window_q_stride=variable_window_q_stride,
             scale_softmax_log2=scale_softmax_log2,
             output_scale=output_scale,
+            softmax_stats=softmax_stats,
             q_offset=q_offset,
             is_persistent=is_persistent,
             is_clc_dynamic=is_clc_dynamic,
