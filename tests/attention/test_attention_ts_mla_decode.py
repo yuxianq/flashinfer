@@ -1203,6 +1203,7 @@ def test_attention_ts_mla_wrapper_uses_compile_oriented_contract():
         "kv_data_type",
         "o_data_type",
         "mask_type",
+        "store_softmax_stats",
         "workspace_buffer",
     )
     for name in (
@@ -1238,6 +1239,7 @@ def test_attention_ts_mla_wrapper_uses_compile_oriented_contract():
         "bmm1_scale",
         "bmm2_scale",
         "out",
+        "softmax_stats",
         "validate",
     )
     assert run_parameters["block_tables"].default is inspect.Parameter.empty
@@ -1245,6 +1247,8 @@ def test_attention_ts_mla_wrapper_uses_compile_oriented_contract():
     assert run_parameters["qo_indptr"].kind is inspect.Parameter.KEYWORD_ONLY
     assert run_parameters["validate"].kind is inspect.Parameter.KEYWORD_ONLY
     assert run_parameters["validate"].default is True
+    assert plan_parameters["store_softmax_stats"].default is False
+    assert run_parameters["softmax_stats"].default is None
 
 
 def test_attention_ts_mla_plan_publishes_frozen_state_after_workspace_binding(
@@ -1496,8 +1500,10 @@ def test_attention_ts_mla_run_requires_plan():
         wrapper.run(None, None, None, None)
 
 
+@pytest.mark.parametrize("store_softmax_stats", (False, True))
 def test_attention_ts_mla_run_validate_false_bypasses_explicit_validators(
     monkeypatch,
+    store_softmax_stats,
 ):
     """Leave validation outside compiled and captured MLA run regions."""
 
@@ -1517,6 +1523,7 @@ def test_attention_ts_mla_run_validate_false_bypasses_explicit_validators(
         split_kv=1,
         workspace_views=object(),
         compiled=object(),
+        store_softmax_stats=store_softmax_stats,
     )
     runtime = _empty_mla_runtime()
     sentinel = torch.empty(1)
@@ -1529,6 +1536,7 @@ def test_attention_ts_mla_run_validate_false_bypasses_explicit_validators(
         return runtime
 
     def launch(*args, **kwargs):
+        assert kwargs["softmax_stats"] is stats
         return sentinel
 
     monkeypatch.setattr(mla_decode_module, "_prepare_mla_runtime", prepare_runtime)
@@ -1546,7 +1554,21 @@ def test_attention_ts_mla_run_validate_false_bypasses_explicit_validators(
     monkeypatch.setattr(mla_decode_module, "_launch_mla_decode", launch)
 
     tensor = torch.empty(1)
-    assert wrapper.run(tensor, tensor, tensor, tensor, validate=False) is sentinel
+    stats = torch.empty(1, 2) if store_softmax_stats else None
+    assert (
+        wrapper.run(tensor, tensor, tensor, tensor, softmax_stats=stats, validate=False)
+        is sentinel
+    )
+    mismatched_stats = None if store_softmax_stats else torch.empty(1, 2)
+    with pytest.raises(ValueError, match="store_softmax_stats"):
+        wrapper.run(
+            tensor,
+            tensor,
+            tensor,
+            tensor,
+            softmax_stats=mismatched_stats,
+            validate=False,
+        )
     with pytest.raises(TypeError, match="validate must be a bool"):
         wrapper.run(tensor, tensor, tensor, tensor, validate=0)
 

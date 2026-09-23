@@ -40,10 +40,32 @@ skips explicit wrapper checks and host metadata reads for a previously
 validated steady state or CUDA Graph launch; the caller then owns every value,
 bounds, aliasing, and lifetime precondition.
 
+`plan(store_softmax_stats=True)` additionally compiles merge-compatible
+statistics export for every supported kernel/reduction family. Each `run()`
+then requires a caller-owned, contiguous FP32 `softmax_stats` buffer shaped
+`[*query.shape[:-1], 2]`. The final two values are the maximum scaled attention
+logit in natural-log units and `sum(exp(logit - max))`. Internal FP8 probability
+scaling is removed and `bmm2_scale` does not affect these statistics. The API
+still returns O only. Passing or omitting the buffer contrary to the plan is
+rejected even with `validate=False`. The buffer must not overlap any input,
+output, or workspace. The one-shot and workspace-size helpers take the same
+`store_softmax_stats` flag; one-shot execution also takes `softmax_stats`.
+
+Statistics are disabled by default. Enabling them adds raw FP32 QK maximum and sum
+arrays to standalone-reduction scratch. The 1-CTA in-kernel cluster reducer
+uses three shared-memory statistics slots instead of two. Actual sums are
+preserved independently of absolute LSE to avoid cancellation at large logits.
+Partial maxima are subtracted before runtime softmax scaling so small gaps between
+large finite logits remain accurate. Only the final maximum is scaled for export.
+No additional attention pass is performed, and disabled plans retain their original
+scratch size and output/reduction policy.
+
 The one-shot helper reads request metadata to derive plan bounds and constructs
 a temporary wrapper, so it is not CUDA-graph-capturable. Graph-sensitive callers
-must plan `BatchMLADecodePagedTSWrapper` before capture and bind the live
-metadata directly in `run()`.
+can use `prims_ts_batch_mla_decode_with_kv_cache` with explicit bounds and caller
+scratch, or plan `BatchMLADecodePagedTSWrapper` before capture and bind metadata
+directly in `run(validate=False)`. The standalone entry point accepts the same
+`store_softmax_stats` flag and `softmax_stats` buffer.
 
 ## Supported contract
 
