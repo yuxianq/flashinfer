@@ -1181,6 +1181,7 @@ def build_context_task_manager(
         variable_window_q_stride=variable_window_q_stride,
         scale_softmax_log2=scale_softmax_log2,
         smem_p=smem_p0,
+        store_softmax_stats=softmax_stats is not None,
         name="tmem_sp0",
     )
     tmem_p0: TmemPResource | None = None
@@ -1277,6 +1278,7 @@ def build_context_task_manager(
             variable_window_q_stride=variable_window_q_stride,
             scale_softmax_log2=scale_softmax_log2,
             smem_p=smem_p1,
+            store_softmax_stats=softmax_stats is not None,
             name="tmem_sp1",
         )
         tmem_vec1 = TmemStatsResource(
