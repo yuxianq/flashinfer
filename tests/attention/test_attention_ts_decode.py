@@ -2108,10 +2108,10 @@ def test_attention_ts_decode_storage_page_size_contract() -> None:
 
 @pytest.mark.parametrize("page_size", (4, 32, 128))
 @pytest.mark.parametrize("sparse", (False, True))
-def test_attention_ts_decode_fp8_bf16_reduction_requires_sparse_page_route(
+def test_attention_ts_decode_fp8_bf16_reduction_supports_dense_and_sparse(
     page_size, sparse
 ):
-    """The FP8/BF16 reducer is qualified for every sparse fragment size."""
+    """The FP8/BF16 reducer supports dense and sparse paged KV."""
     cfg = FmhaDecodeConfig(
         headdim=256,
         q_dtype=Float8E4M3FN,
@@ -2126,7 +2126,7 @@ def test_attention_ts_decode_fp8_bf16_reduction_requires_sparse_page_route(
         max_seq_len_q=4,
         tile_size_q=64,
     )
-    assert cfg.supports_reduction_dtypes is sparse
+    assert cfg.supports_reduction_dtypes
 
 
 def test_attention_ts_decode_dtype_pair_guards() -> None:
