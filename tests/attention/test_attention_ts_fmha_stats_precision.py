@@ -167,9 +167,6 @@ def _check_large_logits(
     from flashinfer.attention.prims_ts import BatchDecodePagedTSWrapper, decode
     from flashinfer.attention.prims_ts.kernels.fmha_decode import fmha_decode_config
 
-    # One KV iteration per split keeps the exact 512-key/two-split regression.
-    monkeypatch.setattr(fmha_decode_config, "MIN_LOOP_ITERS_PER_SPLIT", 1)
-
     if reduction == "serial":
         for name in (
             "use_parallel_separate_reduction",
@@ -215,6 +212,9 @@ def _check_large_logits(
         split_kv_mode=modes[reduction],
         splits_kv=splits,
         max_splits_kv=splits,
+        # Use the explicit control: the default is bound when the factory is
+        # defined, so monkeypatching the module constant no longer overrides it.
+        min_loop_iters_per_split=1,
         use_attention_sinks=use_sink,
         mask_type="dense",
         auto_tuner=False,

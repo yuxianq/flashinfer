@@ -2678,6 +2678,7 @@ class TmemCorrResource(DecodeGenResourceBase):
         self,
         *,
         resolves: cutlass.Boolean,
+        stats_owner: cutlass.Boolean,
         logical_h_k_idx: Int32,
         logical_b_idx: Int32,
         logical_kv_idx: Int32,
@@ -2720,7 +2721,7 @@ class TmemCorrResource(DecodeGenResourceBase):
                     logical_output_row_idx,
                     denominator,
                     global_max,
-                    store_stats=valid_output_row,
+                    store_stats=valid_output_row & stats_owner,
                 )
         return valid_output_row, row_base, row_scale
 
@@ -2763,6 +2764,7 @@ class TmemCorrResource(DecodeGenResourceBase):
         logical_output_row_idx = q_row_offset + exchange_row_idx
         valid_output_row, row_base, row_scale = self._kv_tile_256_output_row_state(
             resolves=output_lane,
+            stats_owner=output_lane,
             logical_h_k_idx=logical_h_k_idx,
             logical_b_idx=logical_b_idx,
             logical_kv_idx=logical_kv_idx,
@@ -3089,6 +3091,7 @@ class TmemCorrResource(DecodeGenResourceBase):
         logical_output_row_idx = q_row_offset + exchange_row_idx
         valid_output_row, row_base, row_scale = self._kv_tile_256_output_row_state(
             resolves=cutlass.Boolean(True),
+            stats_owner=owned_col_base == Int32(0),
             logical_h_k_idx=logical_h_k_idx,
             logical_b_idx=logical_b_idx,
             logical_kv_idx=logical_kv_idx,
