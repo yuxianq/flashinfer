@@ -1986,6 +1986,7 @@ def batch_mla_decode_with_paged_kv_cache(
             out_dtype=out_dtype,
             mask_type=mask_type,
             device=query.device,
+            store_softmax_stats=store_softmax_stats,
         )
         workspace_buffer = torch.empty(
             workspace_bytes, dtype=torch.int8, device=query.device

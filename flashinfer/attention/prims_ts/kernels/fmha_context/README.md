@@ -112,6 +112,9 @@ The two values are the scaled token-logit maximum `m` in natural-log units and
 paths export the same query/head ordering. The buffer is runtime state and can
 be rebound between eager calls without replanning; CUDA graphs retain its
 captured address. No additional statistics scratch is needed for prefill.
+Statistics-enabled plans disable deferred row-maximum updates so the exported
+maximum is the true maximum, not merely a normalization anchor. Statistics-disabled
+plans retain the default correction-skipping optimization.
 
 ## Tensor and metadata layouts
 

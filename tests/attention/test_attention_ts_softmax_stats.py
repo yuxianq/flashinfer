@@ -192,6 +192,36 @@ def test_attention_ts_mla_stats_workspace_is_opt_in(split_kv):
     )
 
 
+@pytest.mark.parametrize("store_softmax_stats", (False, True))
+def test_attention_ts_context_stats_require_actual_maxima(
+    monkeypatch, store_softmax_stats
+):
+    from flashinfer.attention.prims_ts import context
+    from flashinfer.attention.prims_ts.kernels.fmha_context import fmha_kernel
+
+    monkeypatch.setattr(
+        fmha_kernel, "FmhaTs", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    kernel = context._make_context_kernel(
+        device_index=0,
+        input_qk_dtype=torch.bfloat16,
+        input_pv_dtype=torch.bfloat16,
+        output_dtype=torch.bfloat16,
+        head_dim=128,
+        mask_type="causal",
+        window_left=-1,
+        head_paired=False,
+        num_qo_heads=8,
+        num_kv_heads=2,
+        has_q_offset=True,
+        causal_single_kv_tile=False,
+        scheduler="static_persistent",
+        uses_ldtm_stat=False,
+        store_softmax_stats=store_softmax_stats,
+    )
+    assert kernel.enable_skip_correction is (not store_softmax_stats)
+
+
 @pytest.mark.parametrize("kind", ("decode", "mla"))
 @pytest.mark.parametrize("entrypoint", ("wrapper", "one_shot", "standalone"))
 @pytest.mark.parametrize("packed", (False, True))

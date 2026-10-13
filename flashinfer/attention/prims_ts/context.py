@@ -283,6 +283,7 @@ def _make_context_kernel(
     uses_ldtm_stat: bool,
     fp8_psmem_early_token: bool = False,
     two_cta_umma: bool = False,
+    store_softmax_stats: bool = False,
     page_size: int | None = None,
     max_kv_len: int | None = None,
 ):
@@ -331,7 +332,9 @@ def _make_context_kernel(
         head_paired=head_paired,
         window_size_left=window_left if window_left > 0 else 0,
         h_r=num_qo_heads // num_kv_heads,
-        enable_skip_correction=True,
+        # Export actual maxima, not the deferred normalization anchors that
+        # are sufficient when only the normalized attention output is needed.
+        enable_skip_correction=not store_softmax_stats,
         uses_ldtm_stat=uses_ldtm_stat,
         causal_single_kv_tile=(causal_single_kv_tile and not use_paged_kv),
         use_blackwell_tma_oob_workaround=(
@@ -1496,6 +1499,7 @@ def _make_context_scheduler_probe(
         causal_single_kv_tile=causal_single_kv_tile,
         scheduler="static_persistent",
         uses_ldtm_stat=_default_uses_ldtm_stat(geometry.device_index),
+        store_softmax_stats=geometry.store_softmax_stats,
         page_size=page_size,
         max_kv_len=max_kv_len,
     )
@@ -1804,6 +1808,7 @@ def _get_compiled_context(
         scheduler=scheduler,
         two_cta_umma=two_cta_umma,
         uses_ldtm_stat=_default_uses_ldtm_stat(device_index),
+        store_softmax_stats=compile_spec.store_softmax_stats,
         fp8_psmem_early_token=_default_fp8_psmem_early_token(device_index),
     )
     fmha.cfg.has_varlen = packed
@@ -2037,6 +2042,7 @@ def _get_compiled_paged_context(
         causal_single_kv_tile=False,
         scheduler=scheduler,
         uses_ldtm_stat=_default_uses_ldtm_stat(device_index),
+        store_softmax_stats=compile_spec.store_softmax_stats,
         fp8_psmem_early_token=_default_fp8_psmem_early_token(device_index),
         page_size=page_size,
         max_kv_len=max_kv_len,
