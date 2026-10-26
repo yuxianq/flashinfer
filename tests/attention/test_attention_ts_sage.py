@@ -23,9 +23,10 @@ import warnings
 import pytest
 import torch
 
+# Version strings are unreliable (internal builds report 0.x), so detect the
+# task-scheduling API the PrimTS kernels need instead.
 pytest.importorskip(
-    "cutlass",
-    minversion="4.7.0",
+    "cutlass.experimental.task_scheduling",
     reason="PrimTS attention tests require nvidia-cutlass-dsl>=4.7.0",
 )
 
@@ -672,7 +673,6 @@ def _check_case(case: _SageCase, q, k, v, params, summaries) -> None:
 
 
 @_REQUIRES_PRIMTS_GPU
-@pytest.mark.arch_blackwell
 @pytest.mark.parametrize(
     "case",
     [
@@ -734,7 +734,6 @@ def _reference_sage_scales(layout, case: _SageCase, params) -> torch.Tensor:
 
 
 @_REQUIRES_PRIMTS_GPU
-@pytest.mark.arch_blackwell
 @pytest.mark.parametrize(
     "case",
     [
