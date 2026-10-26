@@ -1270,8 +1270,8 @@ def _get_compiled_mla_decode(
             cutlass.Float32(1.0),
             cutlass.Float32(1.0),
             stream_fake,
-            softmax_stats=stats_fake,
-            output_quant_args=output_quant_args,
+            output_quant_args,
+            stats_fake,
             options=_COMPILE_OPTIONS,
         )
 
@@ -1511,12 +1511,10 @@ def _launch_mla_decode(
         runtime.sparse_inputs,
         runtime.bmm1_scale,
         runtime.bmm2_scale,
-        softmax_stats=None if softmax_stats is None else softmax_stats.view(-1, 2),
-        **(
-            {"output_quant_args": runtime.output_quant_args}
-            if runtime.output_quant_args is not None
-            else {}
-        ),
+        # Reloaded persistent-cache kernels expose a positional TVM-FFI entry
+        # without Python defaults. Keep both optional arguments in the ABI.
+        runtime.output_quant_args,
+        None if softmax_stats is None else softmax_stats.view(-1, 2),
     )
     return runtime.out
 

@@ -562,11 +562,11 @@ def run_parallel_reduction_kernel(
             tidx,
             batch_idx,
             cu_seqlens_q,
-            softmax_stats,
-            acc_lse,
-            acc_lse[row_in_tile, None, query_tile_idx, batch_idx],
-            active_split_kv,
-            softmax_stats_scale,
+            softmax_stats=softmax_stats,
+            acc_lse=acc_lse,
+            row_lse=acc_lse[row_in_tile, None, query_tile_idx, batch_idx],
+            active_split_kv=active_split_kv,
+            softmax_stats_scale=softmax_stats_scale,
         )
 
     prims.barrier_cluster_arrive_relaxed()
