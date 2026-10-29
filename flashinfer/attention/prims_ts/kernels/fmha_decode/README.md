@@ -412,8 +412,8 @@ pytest -q tests/trace/test_fi_trace_template_consistency.py
 
 FP8 E4M3 Q/K/V can produce FP16, BF16, or FP8 output. BF16 output is packed
 from the floating-point accumulator directly, including split-KV reduction.
-It does not pass through an FP8 output tensor. Q and K/V must still use the
-same dtype; callers with BF16 model activations must quantize Q first.
+It does not pass through an FP8 output tensor. Callers using this FP8 Q/K/V
+path with BF16 model activations must quantize Q first.
 
 For scales produced by GPU preprocessing, call `plan(use_device_scales=True)`
 and pass one-element float32 CUDA tensors as `bmm1_scale_device` and
