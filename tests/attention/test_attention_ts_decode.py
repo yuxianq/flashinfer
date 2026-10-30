@@ -2568,6 +2568,41 @@ _DECODE_PUBLIC_SURFACES = (
 )
 
 
+def test_decode_compile_identity_distinguishes_scale_argument_types():
+    from dataclasses import replace
+
+    from flashinfer.attention.prims_ts._compile_cache import _compile_cache_key
+    from flashinfer.attention.prims_ts.decode import _DecodeCompileSpec, _dtype_key
+
+    host_spec = _DecodeCompileSpec(
+        device_index=0,
+        config_items=(),
+        num_qo_heads=8,
+        num_kv_heads=2,
+        head_dim=128,
+        page_size=32,
+        max_kv_len=2048,
+        seq_len_q=1,
+        q_dtype_key=_dtype_key(torch.float8_e4m3fn),
+        k_dtype_key=_dtype_key(torch.float8_e4m3fn),
+        v_dtype_key=_dtype_key(torch.float8_e4m3fn),
+        output_dtype_key=_dtype_key(torch.bfloat16),
+        use_packed_q=False,
+        max_active_clusters=1,
+        kv_prefix_mode="dynamic",
+        kv_lengths_mode="dynamic",
+    )
+    device_spec = replace(host_spec, use_device_scales=True)
+    assert host_spec != device_spec
+    host_key = _compile_cache_key(host_spec, "--opt-level 3")
+    device_key = _compile_cache_key(device_spec, "--opt-level 3")
+    assert host_key is not None and device_key is not None
+    assert host_key != device_key
+    assert device_key == _compile_cache_key(
+        replace(device_spec, device_index=1), "--opt-level 3"
+    )
+
+
 def test_attention_ts_decode_wrapper_has_compile_oriented_contract() -> None:
     """Freeze the compile-oriented plan/run split."""
 
