@@ -531,6 +531,13 @@ options, and embedded device-capacity constants. It hashes the attention source
 tree, including shared preparation, masks, and reductions. Occupancy queries
 are cached per device and cluster size by `_hardware.py`.
 
+PrimTS warm-up can use `_compile_cache.precompile_only()` to persist kernels
+without loading them, or `probe_cached()` to check their disk artifacts.
+`cache_compiled` bypasses in-process memoization in either mode, including
+compiler entry points that return kernel tuples. Sparse MLA memoizes validated
+geometry with an explicit CUDA device. Its prepared launches retain pool/sink
+storage and rebind dynamic query/index/output tensors; replanning clears them.
+
 ### Dispatch Macros
 
 Handle combinatorial parameter spaces:
