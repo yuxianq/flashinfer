@@ -416,8 +416,8 @@ It does not pass through an FP8 output tensor. Callers using this FP8 Q/K/V
 path with BF16 model activations must quantize Q first.
 
 For scales produced by GPU preprocessing, call `plan(use_device_scales=True)`
-and pass one-element float32 CUDA tensors as `bmm1_scale_device` and
-`bmm2_scale_device` to `run()`. These override the host scales. BMM1 uses the
+and pass one-element float32 CUDA tensors as `bmm1_scale` and
+`bmm2_scale` to `run()`. BMM1 uses the
 regular attention scale multiplied by the Q and K dequantization scales;
 BMM2 uses the V dequantization scale. Values must be finite and positive.
 The kernel reads the tensors on each launch, so changing their contents in

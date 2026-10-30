@@ -181,32 +181,22 @@
       "optional": true
     },
     "bmm1_scale": {
-      "shape": null,
-      "dtype": "float32",
-      "optional": true
+      "shape": [
+        "scale_size"
+      ],
+      "dtype": "float32"
     },
     "bmm2_scale": {
-      "shape": null,
-      "dtype": "float32",
-      "optional": true
+      "shape": [
+        "scale_size"
+      ],
+      "dtype": "float32"
     },
     "validate": {
       "shape": null,
       "dtype": "bool",
       "optional": true,
       "description": "Whether to validate per-run tensors and metadata values."
-    },
-    "bmm1_scale_device": {
-      "shape": [
-        "scale_size"
-      ],
-      "dtype": "float32"
-    },
-    "bmm2_scale_device": {
-      "shape": [
-        "scale_size"
-      ],
-      "dtype": "float32"
     }
   },
   "outputs": {

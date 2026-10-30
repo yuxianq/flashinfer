@@ -1,4 +1,3 @@
-# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 # Copyright (c) 2026 by FlashInfer team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -2635,8 +2634,6 @@ def test_attention_ts_decode_wrapper_has_compile_oriented_contract() -> None:
         "qo_indptr",
         "bmm1_scale",
         "bmm2_scale",
-        "bmm1_scale_device",
-        "bmm2_scale_device",
         "out",
         "validate",
     )
@@ -2650,6 +2647,44 @@ def test_attention_ts_decode_wrapper_has_compile_oriented_contract() -> None:
     }.issubset(_DecodePlanState.__dataclass_fields__)
     request_fields = {"qo_indptr", "block_tables"}
     assert request_fields.isdisjoint(_DecodePlanState.__dataclass_fields__)
+
+
+@pytest.mark.parametrize("validate", [False, True])
+@pytest.mark.parametrize(
+    "use_device_scales,bmm1_scale,bmm2_scale,error",
+    [
+        (True, None, 1.0, "bmm1_scale must be"),
+        (True, 0.125, 1.0, "bmm1_scale must be"),
+        (True, torch.ones(1), torch.ones(1), "bmm1_scale must be"),
+        (False, torch.ones(1), 1.0, "device scales require"),
+        (False, 0.125, torch.ones(1), "device scales require"),
+    ],
+)
+def test_attention_ts_decode_scale_types_must_match_plan(
+    monkeypatch, validate, use_device_scales, bmm1_scale, bmm2_scale, error
+):
+    from types import SimpleNamespace
+
+    wrapper = BatchDecodePagedTSWrapper()
+    wrapper._plan_state = SimpleNamespace(
+        use_device_scales=use_device_scales, device=torch.device("cuda:0")
+    )
+
+    def no_host_read(*args, **kwargs):
+        raise AssertionError("scale type checks must not read tensor values")
+
+    monkeypatch.setattr(torch.Tensor, "__float__", no_host_read)
+    monkeypatch.setattr(torch.Tensor, "item", no_host_read)
+    with pytest.raises(ValueError, match=error):
+        wrapper.run(
+            None,
+            None,
+            None,
+            None,
+            bmm1_scale=bmm1_scale,
+            bmm2_scale=bmm2_scale,
+            validate=validate,
+        )
 
 
 _FORBIDDEN_DECODE_TUNING_PARAMETERS = frozenset(
@@ -2772,8 +2807,8 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state(
     }
 
     if use_device_scales:
-        kwargs["bmm1_scale_device"] = torch.ones(1)
-        kwargs["bmm2_scale_device"] = torch.ones(1)
+        kwargs["bmm1_scale"] = torch.ones(1)
+        kwargs["bmm2_scale"] = torch.ones(1)
 
     with pytest.raises(
         ValueError,
@@ -2808,7 +2843,7 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state(
         "seq_lens",
         "block_tables",
         "qo_indptr",
-        *(("bmm1_scale_device", "bmm2_scale_device") if use_device_scales else ()),
+        *(("bmm1_scale", "bmm2_scale") if use_device_scales else ()),
     ):
         incomplete_kwargs = dict(kwargs)
         incomplete_kwargs.pop(required_name)
@@ -2816,6 +2851,12 @@ def test_attention_ts_decode_bound_wrapper_trace_uses_plan_state(
             fi_trace(wrapper.run, **incomplete_kwargs)
 
     defn = fi_trace(wrapper.run, **kwargs)
+    for name in ("bmm1_scale", "bmm2_scale"):
+        scale_input = defn["inputs"][name]
+        assert scale_input["dtype"] == "float32"
+        assert scale_input.get("shape") == (
+            ["scale_size"] if use_device_scales else None
+        )
     dtype_suffix = "bf16" if output_dtype == torch.bfloat16 else "fp16"
     assert defn["name"].startswith(
         f"prims_ts_decode_wrapper_tuple_{dtype_suffix}_output_packed_q"

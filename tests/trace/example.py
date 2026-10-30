@@ -1,4 +1,3 @@
-# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 """
 fi_trace example: generate flashinfer-bench definition JSON files via auto-dump.
 
@@ -2522,8 +2521,8 @@ with contextlib.suppress(Exception):
         (_pts_fp8_k, _pts_fp8_v),
         _pts_fp8_lengths,
         _pts_fp8_table,
-        bmm1_scale_device=_pts_fp8_bmm1,
-        bmm2_scale_device=_pts_fp8_bmm2,
+        bmm1_scale=_pts_fp8_bmm1,
+        bmm2_scale=_pts_fp8_bmm2,
         out=_pts_fp8_out,
     )
 

@@ -1,4 +1,3 @@
-# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 # Copyright (c) 2025-2026 by FlashInfer team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -1400,8 +1399,8 @@ def _make_prims_ts_decode_wrapper_trace(
     )
     if use_device_scales:
         axes["scale_size"] = Const(value=1, description="Per-tensor attention scale.")
-        inputs["bmm1_scale_device"] = Tensor(["scale_size"], dtype="float32")
-        inputs["bmm2_scale_device"] = Tensor(["scale_size"], dtype="float32")
+        inputs["bmm1_scale"] = Tensor(["scale_size"], dtype="float32")
+        inputs["bmm2_scale"] = Tensor(["scale_size"], dtype="float32")
     constraints = [
         "head_dim in (64, 128, 256)",
         "page_size in (4, 8, 16, 32, 64, 128)",
@@ -1584,7 +1583,7 @@ def prims_ts_decode_wrapper_trace_dispatch(**kwargs):
     use_device_scales = bool(getattr(state, "use_device_scales", False))
     required_metadata = (
         "block_tables",
-        *(("bmm1_scale_device", "bmm2_scale_device") if use_device_scales else ()),
+        *(("bmm1_scale", "bmm2_scale") if use_device_scales else ()),
         *(("qo_indptr",) if bool(state.use_packed_q) else ()),
     )
     _require_bound_trace_tensors(
