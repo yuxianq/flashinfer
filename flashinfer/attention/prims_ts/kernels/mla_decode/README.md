@@ -73,6 +73,27 @@ large finite logits remain accurate. Only the final maximum is scaled for export
 No additional attention pass is performed, and disabled plans retain their original
 scratch size and output/reduction policy.
 
+`plan(use_kv_bounds=True)` enables native per-query KV prefix counts, supplied
+to every `run(kv_bounds=...)` as contiguous, 4-byte-aligned CUDA int32 metadata.
+The shape is flat `[B * SQ]` for fixed Q or `[total_q]` for packed Q: one count
+per logical query token, shared by all heads. Counts replace both dense and
+bottom-right causal visibility, are nondecreasing within each request, and must
+lie in `[0, seq_lens[b]]`. The tensor is runtime metadata, never retained by the
+plan. Its presence must agree with the plan even under `validate=False`; dtype,
+device, shape, value range, and monotonicity are checked only with validation
+enabled. Disabled validation makes these caller preconditions.
+
+Bounded mode permits zero rank-local `seq_lens` and zero query prefixes, yielding
+zero output and, when requested, FP32 `(-inf, 0)` maximum/denominator statistics.
+Empty requests need no valid page IDs, although the cache allocation and static
+plan capacities remain nonempty. A native initialization launch publishes neutral
+rows before schedules that can skip empty work. Scheduling and split reduction
+conservatively retain the full raw rank-local KV domain; softmax applies the
+exact row prefix, so no ordinary causal pruning can remove a visible key.
+Bounds and lengths may change between completed CUDA Graph replays without
+replanning. The one-shot helper infers bounded mode from `kv_bounds`; the
+workspace-size helper accepts the corresponding `use_kv_bounds` flag.
+
 The one-shot helper reads request metadata to derive plan bounds and constructs
 a temporary wrapper, so it is not CUDA-graph-capturable. Graph-sensitive callers
 can use `prims_ts_batch_mla_decode_with_kv_cache` with explicit bounds and caller
@@ -90,12 +111,12 @@ directly in `run(validate=False)`. The standalone entry point accepts the same
 | Q/cache dtype | Matching `torch.bfloat16` or `torch.float8_e4m3fn` |
 | Output dtype | `torch.bfloat16` only |
 | Q length | Fixed or packed variable length; packed requests may be empty, while the static maximum remains positive |
-| K/V length | Positive and at most `2**31 - 32768`; the reserve keeps the largest padded split-KV coordinate span in signed `int32` |
+| K/V length | Positive (nonnegative with explicit `kv_bounds`) and at most `2**31 - 32768`; static capacity remains positive |
 | Q heads | Validated at 6, 8, 12, 16, 24, 32, 48, 64, 96, and 128; other positive counts are accepted only when automatic selection reports an implementation |
 | K/V cache | Paged, one logical KV head; `[num_pages, page_size, 576]` or `[num_pages, 1, page_size, 576]` compact storage |
 | Metadata/cache index extents | Flattened query-head capacity, block-table elements, and physical page count must fit signed `int32` |
 | Page size | 16, 32, 64, or 128 tokens |
-| Mask | Dense or bottom-right causal |
+| Mask | Dense, bottom-right causal, or explicit per-query KV prefixes |
 | Scheduling | Automatic nonpersistent, static-persistent, or CLC-persistent selection by kernel family and work shape |
 | Accumulation | FP32 QK/PV and softmax state |
 
@@ -112,7 +133,7 @@ on the metadata device. `block_tables` is a 4-byte-aligned CUDA
 tables and a plane view sliced from `[B, 2, max_num_pages]` metadata.
 `seq_lens` is compact, 4-byte-aligned CUDA `torch.int32`; packed `qo_indptr`
 is contiguous CUDA `torch.int32`. A caller-provided `out` must not overlap
-query, cache, `block_tables`, `seq_lens`, packed `qo_indptr`, or caller-owned
+query, cache, `block_tables`, `seq_lens`, `kv_bounds`, packed `qo_indptr`, or caller-owned
 workspace.
 Storage overlap is an unchecked caller precondition in both validation modes. The API returns O
 only. FP32 LSE is internal workspace and is not exposed as an output.
@@ -132,7 +153,7 @@ only. FP32 LSE is internal workspace and is not exposed as an output.
 - Dense page table: inner-contiguous, non-overlapping CUDA
   `int32[B, max_num_pages]` `block_tables`. Padding between rows is accepted.
 - Runtime lengths: contiguous CUDA `int32[B]` `seq_lens`. Every length is
-  positive and no larger than the static K/V bound.
+  positive (nonnegative with `kv_bounds`) and no larger than the static K/V bound.
 
 Internally, the query-token and query-head axes form one affine row space,
 `flat_row = query_idx * H + head_idx`. The 1-CTA profiles partition this space
@@ -162,10 +183,12 @@ no greater than `max_seq_len_q`.
 
 The wrapper receives `block_tables`, `seq_lens`, and packed `qo_indptr` on
 every run. Their storage and values may change between completed launches
-without replanning while page IDs remain valid, K/V lengths stay positive and
-within the static bound, packed-Q deltas stay nonnegative and within their bound,
+without replanning while page IDs remain valid, K/V lengths stay positive
+(nonnegative with `kv_bounds`) and within the static bound,
+packed-Q deltas stay nonnegative and within their bound,
 and the final packed offset equals the current query/output extent. Causal
-metadata must also preserve `q_len[b] <= seq_lens[b]` for every request.
+metadata without explicit `kv_bounds` must also preserve
+`q_len[b] <= seq_lens[b]` for every request.
 Individual packed requests may be empty. An all-empty packed launch requires a
 positive `max_seq_len_q` and returns an empty output without GPU dispatch.
 
@@ -345,6 +368,12 @@ runtime K pruning, split-KV reduction, output/workspace contracts, and CUDA
 graphs:
 
 ```bash
-pytest -q tests/attention/test_attention_ts_mla_decode.py
-pytest -q tests/trace/test_fi_trace_template_consistency.py
+python3 -m pytest -q tests/attention/test_attention_ts_mla_decode.py
+python3 -m pytest -q tests/attention/test_attention_ts_mla_kv_bounds.py
+python3 -m pytest -q tests/trace/test_fi_trace_template_consistency.py
 ```
+
+The bounds suite exercises fixed/packed token indexing, zero local caches,
+nondecreasing prefixes, rank-local page boundaries, FP32 merge statistics,
+split reduction, and graph replay of mutable prefix metadata. Device tests
+require a supported GPU and CUTLASS DSL 4.7 or newer.

@@ -236,6 +236,17 @@ reducer only after producer completion and TMEM teardown; the reducer
 initializes local resources before all threads acquire. Older architectures
 retain stream ordering.
 
+### Per-query KV prefixes for MLA decode
+
+MLA decode supports `plan(use_kv_bounds=True)` with per-run
+`kv_bounds`: contiguous CUDA int32 counts shaped `[B * SQ]` for fixed Q or
+`[total_q]` for packed Q. Counts are shared across a token's heads, replace
+dense/causal visibility, and must be nondecreasing within each request and no
+larger than that request's `seq_lens`. Zero local lengths and prefixes return
+zero O and optional `(-inf, 0)` statistics. Bounds remain graph-live metadata,
+not plan-owned values. See the [MLA contract](kernels/mla_decode/README.md) for
+validation, empty-cache, and workspace details.
+
 ### Merge-compatible softmax statistics
 
 Contiguous/paged prefill, paged FMHA decode, and paged MLA decode accept

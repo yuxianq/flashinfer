@@ -53,8 +53,9 @@ _GRAPH_OWNERS: list[tuple[object, ...]] = []
 
 @pytest.mark.parametrize("store_stats", (False, True))
 @pytest.mark.parametrize("packed_query", (False, True))
+@pytest.mark.parametrize("use_kv_bounds", (False, True))
 def test_attention_ts_mla_launch_preserves_persistent_cache_abi(
-    store_stats, packed_query
+    store_stats, packed_query, use_kv_bounds
 ):
     from flashinfer.attention.prims_ts.mla_decode import _launch_mla_decode
 
@@ -62,6 +63,7 @@ def test_attention_ts_mla_launch_preserves_persistent_cache_abi(
     query = torch.empty(shape)
     output = torch.empty((*shape[:-1], 512))
     stats = torch.empty((*shape[:-1], 2)) if store_stats else None
+    bounds = torch.full((2,), 32, dtype=torch.int32) if use_kv_bounds else None
     runtime = SimpleNamespace(
         query=query,
         out=output,
@@ -76,13 +78,14 @@ def test_attention_ts_mla_launch_preserves_persistent_cache_abi(
 
     def compiled(*args):
         # Reloaded TVM-FFI functions have no keyword arguments or defaults.
-        assert len(args) == 16
-        assert args[-2] is None
+        assert len(args) == 17
+        assert args[-3] is None
         if store_stats:
-            assert args[-1].data_ptr() == stats.data_ptr()
-            assert args[-1].shape == (16, 2)
+            assert args[-2].data_ptr() == stats.data_ptr()
+            assert args[-2].shape == (16, 2)
         else:
-            assert args[-1] is None
+            assert args[-2] is None
+        assert args[-1] is bounds
         calls.append(args)
 
     result = _launch_mla_decode(
@@ -96,6 +99,7 @@ def test_attention_ts_mla_launch_preserves_persistent_cache_abi(
         workspace=workspace,
         compiled=compiled,
         softmax_stats=stats,
+        kv_bounds=bounds,
     )
     assert result is output
     assert len(calls) == 1

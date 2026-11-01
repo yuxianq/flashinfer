@@ -1,3 +1,4 @@
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 # Copyright (c) 2026 by FlashInfer team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -362,8 +363,9 @@ def _fp8_request_reference(
     num_insts_kv: int,
     tile_size_kv: int,
     splits_kv: int,
+    visible_kv_len: int | None = None,
 ) -> torch.Tensor:
-    """Model P448 probabilities across split-local KV instruction streams."""
+    """Model P448 using raw-KV split partitions and optional prefix visibility."""
 
     if num_insts_kv <= 0 or tile_size_kv <= 0 or splits_kv <= 0:
         raise ValueError("KV instruction, tile, and split counts must be positive")
@@ -373,6 +375,15 @@ def _fp8_request_reference(
         + q_stored[:, _LATENT_DIM:] @ cache_stored[:, _LATENT_DIM:].T
     )
     num_heads, seq_len = scores.shape
+    visible = seq_len if visible_kv_len is None else visible_kv_len
+    if not 0 <= visible <= seq_len:
+        raise ValueError("visible_kv_len must be within the raw KV sequence")
+    if visible == 0:
+        return torch.zeros(
+            (num_heads, _LATENT_DIM), dtype=torch.float32, device=scores.device
+        )
+    # Explicit bounds mask rows inside the raw request's split/instance streams.
+    # Trimming the cache before partitioning would change FP8 P quantization.
     num_tiles = (seq_len + tile_size_kv - 1) // tile_size_kv
     tiles_per_group = splits_kv * num_insts_kv
     groups_per_split = (num_tiles + tiles_per_group - 1) // tiles_per_group
@@ -398,7 +409,9 @@ def _fp8_request_reference(
     for stream_idx, tile_indices in enumerate(stream_tiles):
         for tile_idx in tile_indices:
             begin = tile_idx * tile_size_kv
-            end = min(begin + tile_size_kv, seq_len)
+            if begin >= visible:
+                continue
+            end = min(begin + tile_size_kv, visible)
             tile_scores = scores[:, begin:end]
             local_max = tile_scores.max(dim=-1).values
             new_max = (
@@ -1193,6 +1206,7 @@ def test_attention_ts_mla_wrapper_uses_compile_oriented_contract():
         "o_data_type",
         "mask_type",
         "store_softmax_stats",
+        "use_kv_bounds",
         "workspace_buffer",
         "validate",
     )
@@ -1215,6 +1229,7 @@ def test_attention_ts_mla_wrapper_uses_compile_oriented_contract():
         "block_tables",
         "seq_lens",
         "qo_indptr",
+        "kv_bounds",
     ):
         assert request_metadata not in plan_parameters
 
@@ -1226,6 +1241,7 @@ def test_attention_ts_mla_wrapper_uses_compile_oriented_contract():
         "block_tables",
         "seq_lens",
         "qo_indptr",
+        "kv_bounds",
         "bmm1_scale",
         "bmm2_scale",
         "out",
@@ -1238,7 +1254,10 @@ def test_attention_ts_mla_wrapper_uses_compile_oriented_contract():
     assert run_parameters["validate"].kind is inspect.Parameter.KEYWORD_ONLY
     assert run_parameters["validate"].default is True
     assert plan_parameters["store_softmax_stats"].default is False
+    assert plan_parameters["use_kv_bounds"].default is False
     assert run_parameters["softmax_stats"].default is None
+    assert run_parameters["kv_bounds"].default is None
+    assert run_parameters["kv_bounds"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 @pytest.mark.parametrize("validate", (True, False))
@@ -1391,6 +1410,7 @@ def test_attention_ts_mla_decode_bound_wrapper_trace_uses_plan_state():
         max_kv_len=64,
         kv_lora_rank=_LATENT_DIM,
         qk_rope_head_dim=_ROPE_DIM,
+        use_kv_bounds=False,
     )
     for required_name in ("block_tables", "seq_lens", "qo_indptr"):
         incomplete_kwargs = dict(kwargs)
@@ -1500,6 +1520,7 @@ def test_attention_ts_mla_run_validate_false_bypasses_explicit_validators(
         workspace_views=object(),
         compiled=object(),
         store_softmax_stats=store_softmax_stats,
+        use_kv_bounds=False,
     )
     runtime = _empty_mla_runtime()
     sentinel = torch.empty(1)
