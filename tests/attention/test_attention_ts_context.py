@@ -803,6 +803,7 @@ def test_attention_ts_context_paged_wrapper_exposes_compile_oriented_contract() 
         "seq_lens_kv",
         "out",
         "softmax_stats",
+        "softmax_scale",
         "scale_softmax_log2",
         "output_scale",
         "validate",
@@ -891,6 +892,7 @@ def test_attention_ts_context_contiguous_wrapper_exposes_compile_oriented_contra
         "variable_window_cta_starts",
         "out",
         "softmax_stats",
+        "softmax_scale",
         "scale_softmax_log2",
         "output_scale",
         "validate",
@@ -1180,6 +1182,7 @@ def test_attention_ts_context_contiguous_plan_reuses_dynamic_packed_requests(
         lambda _geometry: "static_persistent",
     )
     monkeypatch.setattr(context_module, "_get_compiled_context", fake_compile)
+    monkeypatch.setattr(context_module, "_default_two_cta_umma", lambda _device: False)
 
     wrapper = BatchPrefillTSWrapper()
     wrapper.plan(
@@ -1239,6 +1242,9 @@ def test_attention_ts_context_contiguous_plan_reuses_dynamic_packed_requests(
         *second,
         out=second_out,
         softmax_stats=second_stats,
+        softmax_scale=torch.tensor((0.25 / math.log2(math.e),), dtype=torch.float32)
+        if store_softmax_stats
+        else None,
         scale_softmax_log2=scale_softmax_log2,
         output_scale=output_scale,
         validate=False,
@@ -1978,6 +1984,7 @@ def test_attention_ts_context_paged_run_forwards_valid_scales(
         qo_indptr,
         block_tables,
         seq_lens_kv,
+        None,
         None,
     )
     assert all(
