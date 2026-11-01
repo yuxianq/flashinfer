@@ -5370,7 +5370,6 @@ def test_attention_ts_context_supplied_out_stream_and_cuda_graph():
 @pytest.mark.parametrize("head_dim,head_dim_vo", [(128, 128), (192, 128), (256, 256)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn])
 @pytest.mark.parametrize("out_dtype", [torch.bfloat16, torch.float8_e4m3fn])
-@pytest.mark.arch_blackwell
 @_REQUIRES_CONTEXT_GPU
 def test_attention_ts_context_softmax_stats(
     packed, causal, head_dim, head_dim_vo, dtype, out_dtype
@@ -5544,7 +5543,6 @@ def test_attention_ts_context_mla_chunk_merge(heads, dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn])
-@pytest.mark.arch_blackwell
 @_REQUIRES_CONTEXT_GPU
 def test_attention_ts_context_empty_mla_chunk(dtype):
     """A batch member with no cached chunk must not read a neighbor's KV."""

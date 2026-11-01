@@ -43,8 +43,8 @@ from flashinfer.attention.prims_ts import (
 
 _REQUIRES_PRIMTS_GPU = pytest.mark.skipif(
     not torch.cuda.is_available()
-    or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
-    reason="PrimTS attention requires SM100 or SM103",
+    or torch.cuda.get_device_capability() not in ((10, 0), (10, 3), (10, 7)),
+    reason="PrimTS attention requires SM100, SM103, or SM107",
 )
 _FP8 = torch.float8_e4m3fn
 # Captured DSL launches keep raw pointers into these allocations.
@@ -794,7 +794,6 @@ def test_attention_ts_softmax_stats_runtime_buffer_validation(kind):
 
 
 @pytest.mark.parametrize("kind", ("prefill", "decode", "mla"))
-@pytest.mark.arch_blackwell
 @_REQUIRES_PRIMTS_GPU
 def test_attention_ts_softmax_stats_graph_reloads_metadata(kind):
     case = _make_paged_case(kind)

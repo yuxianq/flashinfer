@@ -2721,7 +2721,6 @@ def test_attention_ts_decode_softmax_stats_requires_exact_anchor() -> None:
         "gmem_reduction_with_separate_kernel",
     ),
 )
-@pytest.mark.arch_blackwell
 @_REQUIRES_PRIMTS_GPU
 def test_attention_ts_decode_softmax_stats_attention_sink(
     monkeypatch, dtype, reduction
