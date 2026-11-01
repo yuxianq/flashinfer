@@ -194,6 +194,13 @@ def test_attention_ts_sink_scale_preserves_disabled_arithmetic(store_stats, raw_
     log2_e = np.float32(math.log2(math.e))
     base2 = scale * log2_e
     sink = np.float32(raw * scale + np.float32(7))
+    rounded_products = []
+
+    def rounded_multiply(left, right, *, rounding):
+        assert rounding == "rn"
+        rounded_products.append((left, right))
+        return np.float32(left * right)
+
     namespace = {
         "Float32": np.float32,
         "Int32": np.int32,
@@ -205,7 +212,12 @@ def test_attention_ts_sink_scale_preserves_disabled_arithmetic(store_stats, raw_
             ),
         ),
         "cute": SimpleNamespace(
-            math=SimpleNamespace(min=min, exp2=lambda value, **_kwargs: np.exp2(value))
+            math=SimpleNamespace(
+                min=min,
+                exp2=lambda value, **_kwargs: np.exp2(value),
+                mul=rounded_multiply,
+                RoundingMode=SimpleNamespace(NEAREST_EVEN="rn"),
+            )
         ),
     }
     exec(
@@ -229,6 +241,26 @@ def test_attention_ts_sink_scale_preserves_disabled_arithmetic(store_stats, raw_
         (sink - raw * scale) * log2_e if store_stats else sink * log2_e - raw * base2
     )
     np.testing.assert_array_equal(actual, np.exp2(delta))
+    assert len(rounded_products) == int(store_stats)
+
+
+def test_attention_ts_sink_rounding_boundary_prevents_fma_contraction():
+    """The original FP32 maximum is not the unrounded product inside an FMA."""
+    raw = np.float32(2**24 + 2)
+    scale = np.float32(0.37)
+    maximum = raw * scale
+    sink = np.float32(maximum + np.float32(7))
+    log2_e = np.float32(math.log2(math.e))
+    rounded_delta = sink - maximum
+    # Binary64 exactly represents this FP32 product and its subtraction, so
+    # narrowing only once models the contracted multiply/subtract result.
+    contracted_delta = np.float32(float(sink) - float(raw) * float(scale))
+    expected = np.float32(1024) + np.exp2(rounded_delta * log2_e)
+    contracted = np.float32(1024) + np.exp2(contracted_delta * log2_e)
+    assert maximum == np.float32(6207570.5)
+    assert rounded_delta == np.float32(7)
+    assert contracted_delta == np.float32(6.760000228881836)
+    assert expected - contracted == np.float32(233.990966796875)
 
 
 @_REQUIRES_PRIMTS_GPU
