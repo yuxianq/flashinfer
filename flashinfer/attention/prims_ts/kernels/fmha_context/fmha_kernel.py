@@ -671,6 +671,30 @@ class FmhaDomainPolicy:
     softmax1_domain_kwargs: DomainKwargs
 
 
+def _uses_sm107_dense_mla_q_pruning(cfg: FmhaConfig) -> bool:
+    """Prune unused packed-Q pairs in native SM107 FP8 expanded MLA."""
+    if not (
+        not cfg.is_causal
+        and not cfg.has_variable_window
+        and cfg.window_size_left == 0
+        and not cfg.head_paired
+        and not cfg.use_paged_kv
+        and cfg.has_varlen
+        and not cfg.has_uniform_varlen
+        and cfg.num_qkv_instances == 2
+        and not cfg.two_cta_umma
+        and cfg.logical_head_dim_qk == 192
+        and cfg.pv_mma_tiler[1] == 128
+        and cfg.q_dtype == cfg.k_dtype == cfg.v_dtype == cutlass.Float8E4M3FN
+        and cfg.o_dtype == cutlass.BFloat16
+    ):
+        return False
+    from cutlass.cutlass_dsl import BaseDSL
+
+    arch = BaseDSL._get_dsl().get_arch_enum()
+    return (arch.major, arch.minor) == (10, 7)
+
+
 def build_context_task_manager(
     *,
     cfg: FmhaConfig,
@@ -1125,7 +1149,7 @@ def build_context_task_manager(
             "name": "work_queue",
         }
         if (
-            cfg.is_causal
+            (cfg.is_causal or _uses_sm107_dense_mla_q_pruning(cfg))
             and cfg.has_varlen
             and not cfg.has_uniform_varlen
             and cum_seqlen_q is not None
