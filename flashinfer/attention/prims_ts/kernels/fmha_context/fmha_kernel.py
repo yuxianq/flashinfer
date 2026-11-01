@@ -246,7 +246,7 @@ def _init_task_with_domain(
     """Initialize a captured Task with its static validation loop domain."""
     schedule = kwargs.get("schedule")
     if schedule is None:
-        raise ValueError("Causal domain tasks require a captured schedule.")
+        raise ValueError("Domain tasks require a captured schedule.")
     if domain is not None:
         schedule.loop_end = domain
     task_init(task, **kwargs)
@@ -323,6 +323,40 @@ def _init_causal_domain_state(
     task._offset = offset
     task._window_size_left = window_size_left
     task._packed_window = packed_window
+
+
+class PackedDenseDomainTask(Task):
+    """Request-local dense KV extent with one masked tile for empty rows."""
+
+    def __init__(
+        self,
+        num_kv_tiles: int | Int32,
+        tile_size_kv: int,
+        batch_idx: int,
+        cum_seqlen_k: cute.Tensor,
+        offset: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        """Retain the planned domain for validation and bound runtime KV work."""
+        static_domain = (
+            max(num_kv_tiles - offset, 0) if isinstance(num_kv_tiles, int) else None
+        )
+        _init_task_with_domain(self, kwargs, static_domain)
+        self._num_kv_tiles = num_kv_tiles
+        self._tile_size_kv = tile_size_kv
+        self._batch_idx = batch_idx
+        self._cum_seqlen_k = cum_seqlen_k
+        self._offset = offset
+
+    def get_domain(self, tile_coord: cute.Coord) -> int | Int32:
+        """Use the same live KV bound for each task's N or N-1 domain."""
+        batch_coord = Int32(tile_coord[self._batch_idx])
+        k_begin = Int32(self._cum_seqlen_k[batch_coord])
+        seqlen_k = Int32(self._cum_seqlen_k[batch_coord + Int32(1)]) - k_begin
+        runtime_tiles = cute.ceil_div(seqlen_k, self._tile_size_kv)
+        # Empty KV still traverses HEAD/TAIL to write zero O and (-inf, 0).
+        domain = _domain_min(self._num_kv_tiles, _domain_max(1, runtime_tiles))
+        return domain - self._offset
 
 
 class CausalDomainTask(Task):
@@ -2569,6 +2603,24 @@ def _select_fmha_domain_policy(
             domain_n_minus_1_kwargs=causal_n_minus_1,
             softmax0_domain_kwargs=softmax0_domain,
             softmax1_domain_kwargs=softmax1_domain,
+        )
+    if _uses_sm107_dense_mla_q_pruning(cfg):
+        if cum_seqlen_k is None:
+            raise ValueError("Packed dense MLA domains require runtime KV offsets")
+        dense_kwargs: DomainKwargs = {
+            "task_class": PackedDenseDomainTask,
+            "num_kv_tiles": num_kv_tiles,
+            "tile_size_kv": cfg.kv_tile_n,
+            "batch_idx": batch_idx,
+            "cum_seqlen_k": cum_seqlen_k,
+        }
+        domain_n_kwargs = {**dense_kwargs, "offset": 0}
+        domain_n_minus_1_kwargs = {**dense_kwargs, "offset": 1}
+        return FmhaDomainPolicy(
+            domain_n_kwargs=domain_n_kwargs,
+            domain_n_minus_1_kwargs=domain_n_minus_1_kwargs,
+            softmax0_domain_kwargs=domain_n_kwargs,
+            softmax1_domain_kwargs=domain_n_kwargs,
         )
     # Dense query-paired fallback: no head-pairing or causal mask, so both
     # peers traverse the full static K/V domain.
