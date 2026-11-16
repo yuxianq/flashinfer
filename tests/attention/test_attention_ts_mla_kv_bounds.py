@@ -153,8 +153,9 @@ def _bounded_reference(
     *,
     qo_indptr: torch.Tensor | None = None,
     policy: dict[str, object] | None = None,
+    bf16_single_tile: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute independent FP32 stats, optionally modeling the FP8 P schedule."""
+    """Compute FP32 stats and model the selected low-precision PV operands."""
 
     query = case.query.reshape(-1, case.query.shape[-2], case.query.shape[-1])
     output = torch.zeros(
@@ -195,8 +196,17 @@ def _bounded_reference(
                     visible_kv_len=visible,
                 )
             else:
+                probabilities = weights
+                if bf16_single_tile:
+                    # This BF16 oracle covers one KV tile, without online or
+                    # split rescaling. PV rounds P; the denominator does not.
+                    assert case.query.dtype == torch.bfloat16 and policy is not None
+                    assert cache.shape[0] <= int(policy["tile_size_kv"])
+                    assert int(policy["split_kv"]) == 1
+                    assert int(policy["num_insts_kv"]) == 1
+                    probabilities = weights.to(torch.bfloat16).float()
                 output[query_idx] = (
-                    weights
+                    probabilities
                     @ visible_cache[:, :_LATENT_DIM]
                     / denominator[:, None]
                     * case.output_scale
@@ -244,9 +254,14 @@ def _assert_bounded_result(
     *,
     policy: dict[str, object],
     qo_indptr: torch.Tensor | None = None,
+    bf16_single_tile: bool = False,
 ) -> None:
     expected_output, expected_stats = _bounded_reference(
-        case, bounds, qo_indptr=qo_indptr, policy=policy
+        case,
+        bounds,
+        qo_indptr=qo_indptr,
+        policy=policy,
+        bf16_single_tile=bf16_single_tile,
     )
     assert output.dtype == case.out_dtype
     assert stats.dtype == torch.float32
@@ -353,7 +368,14 @@ def test_attention_ts_mla_kv_bounds_helix_page_boundary(qkv_dtype: torch.dtype) 
     wrapper = _plan_bounds(case, max_q_len=seq_len_q)
     output, stats = _run_bounds(wrapper, case, bounds)
     policy = _policy_dict(wrapper)
-    _assert_bounded_result(case, bounds, output, stats, policy=policy)
+    _assert_bounded_result(
+        case,
+        bounds,
+        output,
+        stats,
+        policy=policy,
+        bf16_single_tile=qkv_dtype == torch.bfloat16,
+    )
 
     merged, merged_stats = _merge_reference(output, stats)
     local_expected, local_stats = _bounded_reference(case, bounds, policy=policy)
