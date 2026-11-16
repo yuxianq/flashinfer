@@ -1252,6 +1252,13 @@ def test_attention_ts_trace_semantic_and_storage_pages(
         attention_ts_decode_trace_dispatch(**standalone_kwargs),
     )
     for template in direct_templates:
+        # The registry samples native pages and encoded page size 4; other
+        # encoded sizes are generated dynamically by the same factory.
+        if not encoded or semantic_page_size == 4:
+            assert any(
+                template is registered
+                for registered in attention_ts_decode_trace_dispatch.templates
+            )
         assert ("_encoded_page" in template.name_prefix) == encoded
         if encoded:
             assert f"_encoded_page{semantic_page_size}" in template.name_prefix
@@ -1667,6 +1674,13 @@ def test_prims_ts_mla_kv_bounds_trace_contract(
         kwargs["qo_indptr"] = torch.tensor((0, 6, 7), dtype=torch.int32)
     if store_softmax_stats:
         kwargs["softmax_stats"] = torch.empty((*query.shape[:-1], 2))
+    default_template = prims_ts_decode_mla_one_shot_trace_dispatch(
+        **{name: value for name, value in kwargs.items() if name != "softmax_stats"}
+    )
+    assert any(
+        default_template is registered
+        for registered in prims_ts_decode_mla_one_shot_trace_dispatch.templates
+    )
     bounds = torch.tensor(
         [0] * 6 + ([1] if packed_query else [0, 1, 63, 64, 65, 65]),
         dtype=torch.int32,
